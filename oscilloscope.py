@@ -20,10 +20,12 @@ class Oscilloscope:
                     try:
                         temp_instr = self.resource_manager.open_resource(resource)
                         idn = temp_instr.query('*IDN?')
+
                         if 'MSO-X 2024A' in idn or 'Keysight' in idn:
                             oscilloscope_resource = resource
                             temp_instr.close()
                             break
+                        
                         temp_instr.close()
                     except:
                         continue
