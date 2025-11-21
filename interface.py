@@ -9,7 +9,7 @@ from PyQt5.QtGui import QIcon, QCursor
 from PyQt5.QtWidgets import (
     QMainWindow, QHBoxLayout, QVBoxLayout, QPushButton, 
     QWidget, QLabel, QStackedWidget, QProgressBar,
-    QLineEdit, QTextEdit, QGroupBox, QComboBox, QRadioButton, QButtonGroup
+    QLineEdit, QTextEdit, QGroupBox, QComboBox, QRadioButton, QButtonGroup, QCheckBox
 )
 
 plt.rcParams.update({
@@ -231,6 +231,8 @@ class SpectrumPlot(FigureCanvas):
         self.axes = self.figure.add_subplot(111)
         self.x_data = np.array([])
         self.y_data = np.array([])
+        self.approximation_line = None
+        self.show_approximation = False
         self.apply_theme()
         self.setup_plot()
     
@@ -269,13 +271,23 @@ class SpectrumPlot(FigureCanvas):
         self.axes.set_title(title)
         self.axes.grid(True, alpha=0.3)
     
-    def set_data(self, x_data, y_data):
+    def set_data(self, x_data, y_data, approximation_data=None):
         self.x_data, self.y_data = x_data, y_data
         self.axes.clear()
         self.apply_theme()
 
         if len(x_data) > 0 and len(y_data) > 0:
-            self.axes.plot(x_data, y_data, 'g-', linewidth=2)
+            self.axes.plot(x_data, y_data, 'g-', linewidth=2, label='Спектр' if self.language == "russian" else 'Spectrum')
+            
+            if self.show_approximation and approximation_data is not None and len(approximation_data) > 0:
+                if self.approximation_line:
+                    self.approximation_line.remove()
+                self.approximation_line, = self.axes.plot(x_data, approximation_data, 'r--', linewidth=1, alpha=0.7, label='Аппроксимация' if self.language == "russian" else 'Approximation')
+                
+                if self.language == "russian":
+                    self.axes.legend(loc='best')
+                else:
+                    self.axes.legend(loc='best')
         
         x_label = 'Длина волны (нм)' if self.language == "russian" else 'Wavelength (nm)'
         y_label = 'Энергия (Дж)' if self.language == "russian" else 'Energy (J)'
@@ -284,6 +296,12 @@ class SpectrumPlot(FigureCanvas):
         self.axes.set_ylabel(y_label)
         self.axes.set_title(title)
         self.axes.grid(True, alpha=0.3)
+        self.draw_idle()
+    
+    def set_approximation_visible(self, visible):
+        self.show_approximation = visible
+        if self.approximation_line:
+            self.approximation_line.set_visible(visible)
         self.draw_idle()
     
     def update_language(self, language):
@@ -343,9 +361,9 @@ class AveragingPlot(FigureCanvas):
             self.axes.tick_params(axis='y', colors='black')
     
     def setup_plot(self):
-        x_label = 'Время' if self.language == "russian" else 'Time'
-        y_label = 'Энергия (Дж)' if self.language == "russian" else 'Energy (J)'
-        title = 'Энергия от времени' if self.language == "russian" else 'Energy vs time'
+        x_label = 'Интенсивность' if self.language == "russian" else 'Intensity'
+        y_label = 'Энергия лазера (Дж)' if self.language == "russian" else 'Laser energy (J)'
+        title = 'Энергия лазера от интенсивности' if self.language == "russian" else 'Laser energy vs intensity'
         self.axes.set_xlabel(x_label)
         self.axes.set_ylabel(y_label)
         self.axes.set_title(title)
@@ -359,9 +377,9 @@ class AveragingPlot(FigureCanvas):
         if len(x_data) > 0 and len(y_data) > 0:
             self.axes.plot(x_data, y_data, 'r-', linewidth=2, marker='o', markersize=4)
         
-        x_label = 'Время' if self.language == "russian" else 'Time'
-        y_label = 'Энергия (Дж)' if self.language == "russian" else 'Energy (J)'
-        title = 'Энергия от времени' if self.language == "russian" else 'Energy vs time'
+        x_label = 'Интенсивность' if self.language == "russian" else 'Intensity'
+        y_label = 'Энергия лазера (Дж)' if self.language == "russian" else 'Laser energy (J)'
+        title = 'Энергия лазера от интенсивности' if self.language == "russian" else 'Laser energy vs intensity'
         self.axes.set_xlabel(x_label)
         self.axes.set_ylabel(y_label)
         self.axes.set_title(title)
@@ -371,9 +389,9 @@ class AveragingPlot(FigureCanvas):
     def update_language(self, language):
         if self.language != language:
             self.language = language
-            x_label = 'Время' if self.language == "russian" else 'Time'
-            y_label = 'Энергия (Дж)' if self.language == "russian" else 'Energy (J)'
-            title = 'Энергия от времени' if self.language == "russian" else 'Energy vs time'
+            x_label = 'Интенсивность' if self.language == "russian" else 'Intensity'
+            y_label = 'Энергия лазера (Дж)' if self.language == "russian" else 'Laser energy (J)'
+            title = 'Энергия лазера от интенсивности' if self.language == "russian" else 'Laser energy vs intensity'
             self.axes.set_xlabel(x_label)
             self.axes.set_ylabel(y_label)
             self.axes.set_title(title)
@@ -451,14 +469,14 @@ class ExperimentThread(QThread):
     data_updated = pyqtSignal(list, list)
     finished = pyqtSignal()
     
-    def __init__(self, powermeter, monochromator, start_wl, end_wl, step, method):
+    def __init__(self, powermeter, monochromator, start_wl, end_wl, step, measurement_count):
         super().__init__()
         self.powermeter = powermeter
         self.monochromator = monochromator
         self.start_wl = start_wl
         self.end_wl = end_wl
         self.step = step
-        self.method = method
+        self.measurement_count = measurement_count
         self._is_running = True
         self.mutex = QMutex()
     
@@ -480,10 +498,7 @@ class ExperimentThread(QThread):
                 self.monochromator.set_wavelength(current_wl)
                 QThread.msleep(300)
             
-            if self.method == "integration":
-                energy = self.powermeter.get_average_energy(5)
-            else:
-                energy = self.powermeter.get_average_energy(3)
+            energy = self.powermeter.get_average_energy(self.measurement_count)
             
             wavelengths.append(current_wl)
             energies.append(energy)
@@ -508,7 +523,7 @@ class MainWindow(QMainWindow):
         self.calibration_thread = None
         self.experiment_thread = None
         self.calibration_data = {'wavelengths': [], 'energies': []}
-        self.spectrum_method = "approximation"
+        self.measurement_count = 15
         self.initialize_interface()
         
     def initialize_interface(self):
@@ -601,24 +616,6 @@ class MainWindow(QMainWindow):
         self.step_input.setText("5")
         group_layout.addWidget(self.step_input)
         
-        method_layout = QHBoxLayout()
-        self.method_label = QLabel("Метод расчета:" if self.language == "russian" else "Calculation method:")
-        method_layout.addWidget(self.method_label)
-        
-        self.method_group = QButtonGroup(self)
-        self.approximation_radio = QRadioButton("Аппроксимация" if self.language == "russian" else "Approximation")
-        self.integration_radio = QRadioButton("Интегрирование" if self.language == "russian" else "Integration")
-        self.approximation_radio.setChecked(True)
-        
-        self.method_group.addButton(self.approximation_radio)
-        self.method_group.addButton(self.integration_radio)
-        
-        method_layout.addWidget(self.approximation_radio)
-        method_layout.addWidget(self.integration_radio)
-        method_layout.addStretch()
-        
-        group_layout.addLayout(method_layout)
-        
         group_layout.addSpacing(10)
         
         buttons_layout = QHBoxLayout()
@@ -672,7 +669,19 @@ class MainWindow(QMainWindow):
         
         self.spectrum_plot = SpectrumPlot(language=self.language, theme=self.theme)
         self.spectrum_plot_toolbar = NavigationToolbar(self.spectrum_plot, widget)
+        
+        control_layout = QHBoxLayout()
+        control_layout.addStretch()
+        
+        self.show_approximation_label = QLabel("Показать линию аппроксимации" if self.language == "russian" else "Show approximation line")
+        control_layout.addWidget(self.show_approximation_label)
+        self.show_approximation_checkbox = QCheckBox()
+        self.show_approximation_checkbox.setChecked(False)
+        self.show_approximation_checkbox.stateChanged.connect(self.toggle_approximation_line)
+        control_layout.addWidget(self.show_approximation_checkbox)
+        
         layout.addWidget(self.spectrum_plot_toolbar)
+        layout.addLayout(control_layout)
         layout.addWidget(self.spectrum_plot)
         
         return widget
@@ -680,23 +689,70 @@ class MainWindow(QMainWindow):
     def create_averaging_tab(self):
         widget = QWidget()
         layout = QVBoxLayout(widget)
+        layout.setContentsMargins(10, 5, 10, 5)
+        layout.setSpacing(5)
         
         self.averaging_plot = AveragingPlot(language=self.language, theme=self.theme)
+        
         self.averaging_plot_toolbar = NavigationToolbar(self.averaging_plot, widget)
         layout.addWidget(self.averaging_plot_toolbar)
+        
+        input_container = QWidget()
+        input_container.setFixedHeight(60)
+        input_layout = QVBoxLayout(input_container)
+        input_layout.setContentsMargins(0, 0, 0, 0)
+        input_layout.setSpacing(5)
+        
+        center_container = QWidget()
+        center_layout = QHBoxLayout(center_container)
+        center_layout.setContentsMargins(0, 0, 0, 0)
+        
+        left_spacer = QWidget()
+        left_spacer.setFixedWidth(int(self.width() * 0.2))
+        center_layout.addWidget(left_spacer)
+        
+        input_widget = QWidget()
+        input_widget.setFixedWidth(int(self.width() * 0.35))
+        input_widget_layout = QVBoxLayout(input_widget)
+        input_widget_layout.setContentsMargins(0, 0, 0, 0)
+        input_widget_layout.setSpacing(5)
+        
+        self.measurement_count_label = QLabel("Количество измерений для усреднения:" if self.language == "russian" else "Measurement count for averaging:")
+        input_widget_layout.addWidget(self.measurement_count_label)
+        
+        self.measurement_count_input = QLineEdit()
+        self.measurement_count_input.setText(str(self.measurement_count))
+        self.measurement_count_input.textChanged.connect(self.update_measurement_count)
+        input_widget_layout.addWidget(self.measurement_count_input)
+        
+        center_layout.addWidget(input_widget)
+        
+        right_spacer = QWidget()
+        right_spacer.setFixedWidth(int(self.width() * 0.2))
+        center_layout.addWidget(right_spacer)
+        
+        input_layout.addWidget(center_container)
+        layout.addWidget(input_container)
         layout.addWidget(self.averaging_plot)
         
         return widget
     
-    def on_method_changed(self, button):
-        if button == self.approximation_radio:
-            self.spectrum_method = "approximation"
+    def toggle_approximation_line(self, state):
+        if state == Qt.Checked:
+            self.spectrum_plot.set_approximation_visible(True)
         else:
-            self.spectrum_method = "integration"
+            self.spectrum_plot.set_approximation_visible(False)
+    
+    def update_measurement_count(self):
+        try:
+            count = int(self.measurement_count_input.text())
+            if count > 0:
+                self.measurement_count = count
+        except ValueError:
+            pass
     
     def on_lines_changed(self):
         positions = self.time_plot.get_line_positions()
-        print("Позиции линий обновлены:")
 
         for key, value in positions.items():
             print(f"{key}: {value:.3f}")
@@ -723,7 +779,7 @@ class MainWindow(QMainWindow):
             }
             
             if hasattr(self, 'parent_application'):
-                self.parent_application.start_experiment(params, self.spectrum_method)
+                self.parent_application.start_experiment(params, self.measurement_count)
                 
         except ValueError as error:
             print(f"Ошибка в параметрах: {error}")
@@ -775,8 +831,8 @@ class MainWindow(QMainWindow):
     def set_time_data(self, x_data, y_data):
         self.time_plot.set_data(x_data, y_data)
     
-    def set_spectrum_data(self, x_data, y_data):
-        self.spectrum_plot.set_data(x_data, y_data)
+    def set_spectrum_data(self, x_data, y_data, approximation_data=None):
+        self.spectrum_plot.set_data(x_data, y_data, approximation_data)
     
     def switch_tab(self, index):
         self.current_tab = index
@@ -866,12 +922,12 @@ class MainWindow(QMainWindow):
         self.monochromator_start_label.setText("Начальная длина волны (нм):" if self.language == "russian" else "Start wavelength (nm):")
         self.monochromator_end_label.setText("Конечная длина волны (нм):" if self.language == "russian" else "End wavelength (nm):")
         self.step_label.setText("Шаг монохроматора (нм):" if self.language == "russian" else "Monochromator step (nm):")
-        self.method_label.setText("Метод расчета:" if self.language == "russian" else "Calculation method:")
-        self.approximation_radio.setText("Аппроксимация" if self.language == "russian" else "Approximation")
-        self.integration_radio.setText("Интегрирование" if self.language == "russian" else "Integration")
         self.calibrate_button.setText("Автокалибровка" if self.language == "russian" else "Auto-calibration")
         self.reset_button.setText("Сброс параметров" if self.language == "russian" else "Reset parameters")
         self.start_experiment_button.setText("Запуск эксперимента" if self.language == "russian" else "Start experiment")
+        
+        self.show_approximation_label.setText("Показать линию аппроксимации" if self.language == "russian" else "Show approximation line")
+        self.measurement_count_label.setText("Количество измерений для усреднения:" if self.language == "russian" else "Measurement count for averaging:")
     
     def change_language(self, language_text):
         if language_text == "Русский":

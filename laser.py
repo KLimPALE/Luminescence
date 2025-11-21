@@ -1,187 +1,60 @@
-import pyvisa
+import serial
 import time
-import threading
 
-class LaserController:
+class Laser:
     def __init__(self):
-        self.resource_manager = None
-        self.instrument = None
+        self.motor = None
         self.connected = False
-        self.wavelength = 0.0
-        self.power = 0.0
-        self.emission = False
-        self._lock = threading.Lock()
-        
-    def connect(self, resource_name=None):
-        """Подключение к лазеру"""
+
+    def connect(self, com_port=30):
         try:
-            self.resource_manager = pyvisa.ResourceManager()
-            
-            if resource_name:
-                self.instrument = self.resource_manager.open_resource(resource_name)
-                self.instrument.timeout = 5000
-                
-                idn = self.instrument.query('*IDN?')
-                if any(keyword in idn.upper() for keyword in ['LASER', 'NEWPORT', 'COHERENT', 'SPECTRA']):
-                    self.connected = True
-                    print(f"Подключено к лазеру: {idn.strip()}")
-                    self.initialize_laser()
-                    return True
-                else:
-                    self.instrument.close()
-                    return False
-            else:
-                resources = self.resource_manager.list_resources()
-                for resource in resources:
-                    try:
-                        self.instrument = self.resource_manager.open_resource(resource)
-                        self.instrument.timeout = 5000
-                        idn = self.instrument.query('*IDN?')
-                        
-                        if any(keyword in idn.upper() for keyword in ['LASER', 'NEWPORT', 'COHERENT', 'SPECTRA']):
-                            self.connected = True
-                            print(f"Подключено к лазеру: {idn.strip()}")
-                            self.initialize_laser()
-                            return True
-                        else:
-                            self.instrument.close()
-                    except:
-                        continue
-                
-                print("Лазер не найден")
-                return False
-                
-        except Exception as error:
-            print(f"Ошибка подключения к лазеру: {error}")
+            self.motor = serial.Serial(f'COM{com_port}', 115200, timeout=1)
+            self.connected = True
+            print(f"Лазер (моторы) подключён к COM{com_port}")
+            return True
+        except Exception as exception:
+            print(f"Ошибка подключения лазера: {exception}")
             return False
-    
-    def initialize_laser(self):
-        """Инициализация лазера в безопасное состояние"""
-        try:
-            self.set_emission(False)
-            self.set_power(0)
-            print("Лазер инициализирован")
-        except Exception as error:
-            print(f"Ошибка инициализации лазера: {error}")
-    
-    def set_wavelength(self, wavelength):
-        """Установка длины волны лазера (нм)"""
-        if not self.connected:
-            print("Лазер не подключен")
-            return False
-        
-        try:
-            with self._lock:
-                self.instrument.write(f':WAVELENGTH {wavelength}')
-                time.sleep(0.5)
-                
-                actual_wavelength = float(self.instrument.query(':WAVELENGTH?'))
-                self.wavelength = actual_wavelength
-                print(f"Длина волны лазера установлена: {actual_wavelength} нм")
-                return True
-                
-        except Exception as error:
-            print(f"Ошибка установки длины волны: {error}")
-            return False
-    
-    def set_power(self, power):
-        """Установка мощности лазера (%)"""
-        if not self.connected:
-            print("Лазер не подключен")
-            return False
-        
-        try:
-            with self._lock:
-                power = max(0, min(100, power))
-                self.instrument.write(f':POWER {power}')
-                time.sleep(0.1)
-                
-                self.power = power
-                print(f"Мощность лазера установлена: {power}%")
-                return True
-                
-        except Exception as error:
-            print(f"Ошибка установки мощности: {error}")
-            return False
-    
-    def set_emission(self, state):
-        """Включение/выключение излучения лазера"""
-        if not self.connected:
-            print("Лазер не подключен")
-            return False
-        
-        try:
-            with self._lock:
-                if state:
-                    self.instrument.write(':EMISSION ON')
-                    self.emission = True
-                    print("Излучение лазера включено")
-                else:
-                    self.instrument.write(':EMISSION OFF')
-                    self.emission = False
-                    print("Излучение лазера выключено")
-                
-                return True
-                
-        except Exception as error:
-            print(f"Ошибка управления излучением: {error}")
-            return False
-    
-    def get_status(self):
-        """Получение статуса лазера"""
-        if not self.connected:
-            return {
-                'connected': False,
-                'wavelength': 0.0,
-                'power': 0.0,
-                'emission': False,
-                'error': 'Не подключен'
-            }
-        
-        try:
-            with self._lock:
-                status = {
-                    'connected': True,
-                    'wavelength': self.wavelength,
-                    'power': self.power,
-                    'emission': self.emission,
-                    'error': None
-                }
-                
-                try:
-                    error_code = self.instrument.query(':SYST:ERR?')
-                    status['error'] = error_code.strip() if error_code else None
-                except:
-                    pass
-                
-                return status
-                
-        except Exception as error:
-            return {
-                'connected': False,
-                'wavelength': 0.0,
-                'power': 0.0,
-                'emission': False,
-                'error': str(error)
-            }
-    
+
     def disconnect(self):
-        """Отключение лазера"""
-        try:
-            if self.connected:
-                self.set_emission(False)
-                self.set_power(0)
-                
-                if self.instrument:
-                    self.instrument.close()
-                if self.resource_manager:
-                    self.resource_manager.close()
-                
-                self.connected = False
-                print("Лазер отключен")
-                
-        except Exception as error:
-            print(f"Ошибка отключения лазера: {error}")
-    
+        if self.motor:
+            self.motor.close()
+        self.connected = False
+        print("Лазер отключён")
+
+    def go_home(self, motor_id=1):
+        if not self.connected:
+            print("Лазер не подключён")
+            return
+        self.motor.write(f'HOM{motor_id}=500\r'.encode())
+        self._wait_for_free(motor_id)
+
+    def set_wavelength_motor_steps(self, motor_id: int, steps: int):
+        if not self.connected:
+            print("Лазер не подключён")
+            return
+        self.motor.write(f'GA{motor_id}={steps}\r'.encode())
+        self._wait_for_free(motor_id)
+
+    def get_position(self, motor_id: int) -> int:
+        if not self.connected:
+            return -1
+        self.motor.write(f'CUR{motor_id}\r'.encode())
+        time.sleep(0.1)
+        line = self.motor.readline().decode().strip()
+        if line.startswith(f'CUR{motor_id}='):
+            return int(line.split('=')[1])
+        return -1
+
+    def _wait_for_free(self, motor_id: int, timeout=10):
+        for _ in range(timeout * 2):
+            self.motor.write(f'ST{motor_id}\r'.encode())
+            time.sleep(0.1)
+            line = self.motor.readline().decode().strip()
+            if line.endswith('0'):
+                return
+            time.sleep(0.5)
+        print(f"Предупреждение: мотор {motor_id} не освободился за {timeout} сек")
+
     def is_connected(self):
         return self.connected

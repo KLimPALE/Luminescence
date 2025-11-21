@@ -42,8 +42,8 @@ class Oscilloscope:
                 print("Осциллограф Keysight MSOX2024A не найден")
                 return False
                 
-        except Exception as error:
-            print(f"Ошибка подключения: {error}")
+        except Exception as exception:
+            print(f"Ошибка подключения: {exception}")
             return False
     
     def setup_waveform_acquisition(self):
@@ -54,8 +54,8 @@ class Oscilloscope:
             self.instrument.write(':WAVeform:BYTeorder LSBFirst')
             self.instrument.write(':WAVeform:UNSigned OFF')
             print("Настройки waveform установлены")
-        except Exception as error:
-            print(f"Ошибка настройки waveform: {error}")
+        except Exception as exception:
+            print(f"Ошибка настройки waveform: {exception}")
     
     def disconnect(self):
         if self.instrument:
@@ -98,8 +98,8 @@ class Oscilloscope:
             print(f"Получено {len(x_data)} точек, X: [{x_data[0]:.6f}, {x_data[-1]:.6f}], Y: [{min(y_data):.3f}, {max(y_data):.3f}]")
             return x_data, y_data
             
-        except Exception as error:
-            print(f"Ошибка получения данных: {error}")
+        except Exception as exception:
+            print(f"Ошибка получения данных: {exception}")
             return None, None
     
     def get_channel_settings(self):
@@ -133,8 +133,8 @@ class Oscilloscope:
             print("Настройки канала получены")
             return settings
             
-        except Exception as error:
-            print(f"Ошибка получения настроек канала: {error}")
+        except Exception as exception:
+            print(f"Ошибка получения настроек канала: {exception}")
             return None
     
     def get_current_data(self):
@@ -152,8 +152,8 @@ class Oscilloscope:
             
             return x_data, y_data
             
-        except Exception as error:
-            print(f"Ошибка получения данных: {error}")
+        except Exception as exception:
+            print(f"Ошибка получения данных: {exception}")
             return None, None
     
     def is_connected(self):
