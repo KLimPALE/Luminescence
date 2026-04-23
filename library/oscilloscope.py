@@ -11,1196 +11,1474 @@ from typing import Tuple
 
 class Oscilloscope:
     def __init__(self):
-        self.instrument = None
-        self.resource_manager = None
-        self.is_connected = False
-        self.timeout_milliseconds = 5000
+        self._instrument = None
+        self._resource_manager = None
+        self._is_connected = False
+        self._timeout_milliseconds = 15000
+        self._manufacturer = ""
+        self._model_number = ""
+        self._capabilities = {}
+
+        self.acquisition_type_normal = "NORM"
+        self.acquisition_type_average = "AVER"
+        self.acquisition_type_peak = "PEAK"
+        self.acquisition_type_high_resolution = "HRES"
+
+        self.coupling_type_ac = "AC"
+        self.coupling_type_dc = "DC"
+        self.coupling_type_ground = "GND"
+
+        self.trigger_slope_positive = "POS"
+        self.trigger_slope_negative = "NEG"
+        self.trigger_slope_either = "EITH"
+
+        self.trigger_mode_auto = "AUTO"
+        self.trigger_mode_normal = "NORM"
+        self.trigger_mode_single = "SING"
+
+        self.bandwidth_limit_full = "FULL"
+        self.bandwidth_limit_twenty_megahertz = "20MHZ"
+        self.bandwidth_limit_one_hundred_megahertz = "100MHZ"
+        self.bandwidth_limit_two_hundred_megahertz = "200MHZ"
+
+        self.cursor_mode_off = "OFF"
+        self.cursor_mode_x = "X"
+        self.cursor_mode_y = "Y"
+        self.cursor_mode_xy = "XY"
+
+        self.math_function_addition = "ADD"
+        self.math_function_subtraction = "SUBT"
+        self.math_function_multiplication = "MULT"
+        self.math_function_division = "DIV"
+        self.math_function_fft = "FFT"
+
+        self.fft_window_rectangular = "RECT"
+        self.fft_window_hamming = "HAMM"
+        self.fft_window_hanning = "HANN"
+        self.fft_window_blackman = "BLAC"
+
+        self.timebase_mode_main = "MAIN"
+        self.timebase_mode_window = "WIND"
+        self.timebase_mode_xy = "XY"
+        self.timebase_mode_roll = "ROLL"
+
+        self.measurement_parameter_voltage_peak_to_peak = "VPP"
+        self.measurement_parameter_voltage_maximum = "VMAX"
+        self.measurement_parameter_voltage_minimum = "VMIN"
+        self.measurement_parameter_voltage_rms = "VRMS"
+        self.measurement_parameter_frequency = "FREQuency"
+        self.measurement_parameter_period = "PERiod"
+        self.measurement_parameter_rise_time = "RISetime"
+        self.measurement_parameter_fall_time = "FALLtime"
+        self.measurement_parameter_positive_width = "PWIDth"
+        self.measurement_parameter_negative_width = "NWIDth"
+        self.measurement_parameter_duty_cycle = "DUTYcycle"
+        self.measurement_parameter_mean_voltage = "MEAN"
+        self.measurement_parameter_ac_rms = "RMS"
+        self.measurement_parameter_overshoot = "OVERS"
+        self.measurement_parameter_preshoot = "PREShoot"
+        self.measurement_parameter_delay = "DELay"
+        self.measurement_parameter_phase = "PHASe"
 
 
-    def connect(self, resource_string: str = None) -> bool:
-        status = False
+    def connect(self, resource_string: str = None, timeout_milliseconds: int = 15000) -> bool:
+        self._timeout_milliseconds = timeout_milliseconds
 
         try:
-            self.resource_manager = pyvisa.ResourceManager('@py')
+            self._resource_manager = pyvisa.ResourceManager("@py")
 
-            if resource_string:
-                self.instrument = self.resource_manager.open_resource(resource_string)
+            if resource_string is not None:
+                self._instrument = self._resource_manager.open_resource(resource_string)
+
+                if not self._configure_and_verify_instrument():
+                    connection_status = False
+                else:
+                    connection_status = True
             else:
-                available_resources = self.resource_manager.list_resources()
+                available_resources = self._resource_manager.list_resources()
+                found_valid_instrument = False
 
                 for single_resource in available_resources:
-                    if 'USB' in single_resource:
-                        try:
-                            temporary_instrument = self.resource_manager.open_resource(single_resource)
-                            temporary_instrument.timeout = self.timeout_milliseconds
-                            temporary_instrument.read_termination = '\n'
-                            temporary_instrument.write_termination = '\n'
-                            
-                            temporary_instrument.write('*IDN?')
-                            time.sleep(0.2)
-                            identification_string = temporary_instrument.read()
+                    try:
+                        temporary_instrument = self._resource_manager.open_resource(single_resource)
+                        temporary_instrument.timeout = self._timeout_milliseconds
+                        temporary_instrument.read_termination = "\n"
+                        temporary_instrument.write_termination = "\n"
 
-                            if any(brand in identification_string.upper() for brand in ['AGILENT', 'KEYSIGHT', 'RIGOL', 'TEKTRONIX', 'SIGLENT', 'ROHDE', 'SCHWARZ']):
-                                self.instrument = temporary_instrument
+                        temporary_instrument.write("*IDN?")
+                        time.sleep(0.2)
+                        identification_string = temporary_instrument.read()
 
-                                break
-                            else:
-                                temporary_instrument.close()
-                        except Exception as error:
-                            continue
+                        if self._is_oscilloscope(identification_string):
+                            self._instrument = temporary_instrument
+                            found_valid_instrument = True
 
-            if self.instrument is not None:
-                self.is_connected = True
-                status = True
-        except Exception as error:
-            pass
+                            break
+                        else:
+                            temporary_instrument.close()
+                    except Exception:
+                        continue
 
-        return status
+                if not found_valid_instrument:
+                    connection_status = False
+                else:
+                    connection_status = True
 
-
-    def disconnect(self):
-        if self.instrument:
-            self.instrument.close()
-
-        if self.resource_manager:
-            self.resource_manager.close()
-
-        self.is_connected = False
-
-
-    def is_connected(self) -> bool:
-        connection_status = False
-
-        if self.is_connected and self.instrument is not None:
-            try:
-                self.instrument.write('*IDN?')
-                time.sleep(0.2)
-                response_string = self.instrument.read()
-                connection_status = len(response_string) > 0
-            except:
-                connection_status = False
+            if connection_status:
+                self._is_connected = True
+                self._detect_capabilities()
+        except Exception:
+            self._is_connected = False
+            connection_status = False
 
         return connection_status
 
 
+    def _configure_and_verify_instrument(self) -> bool:
+        try:
+            self._instrument.timeout = self._timeout_milliseconds
+            self._instrument.read_termination = "\n"
+            self._instrument.write_termination = "\n"
+
+            self._instrument.write("*IDN?")
+            time.sleep(0.2)
+            response_string = self._instrument.read()
+
+            verification_status = len(response_string) > 0
+        except Exception:
+            verification_status = False
+
+        return verification_status
+
+
+    def _is_oscilloscope(self, identification_string: str) -> bool:
+        oscilloscope_brands = ["AGILENT", "KEYSIGHT", "RIGOL", "TEKTRONIX", "SIGLENT", "ROHDE", "SCHWARZ"]
+        upper_identification = identification_string.upper()
+        is_oscilloscope_device = False
+
+        for single_brand in oscilloscope_brands:
+            if single_brand in upper_identification:
+                is_oscilloscope_device = True
+
+                break
+
+        return is_oscilloscope_device
+
+
+    def _detect_capabilities(self):
+        try:
+            identification_string = self._query_string("*IDN?")
+            parts = identification_string.split(",")
+
+            if len(parts) > 0:
+                self._manufacturer = parts[0]
+
+            if len(parts) > 1:
+                self._model_number = parts[1]
+        except Exception:
+            pass
+
+        self._capabilities["has_average_mode"] = self._check_command_support(":ACQuire:TYPE AVER")
+        self._capabilities["has_math_fft"] = self._check_command_support(":MATH:FUNCtion FFT")
+        self._capabilities["has_mask_test"] = self._check_command_support(":MASK:LOAD \"\"")
+        self._capabilities["has_segmented_memory"] = self._check_command_support(":ACQuire:SEGMent:COUNt?")
+        self._capabilities["maximum_channels"] = self._detect_channel_count()
+        self._capabilities["supports_binary_waveform"] = self._check_binary_waveform_support()
+
+
+    def _check_command_support(self, command: str) -> bool:
+        try:
+            self._write_raw(command)
+            command_supported = True
+        except Exception:
+            command_supported = False
+
+        return command_supported
+
+
+    def _detect_channel_count(self) -> int:
+        channel_count = 4
+
+        for channel_index in range(1, 5):
+            try:
+                self._write_raw(f":CHANnel{channel_index}:DISPlay?")
+                self._read_raw()
+            except Exception:
+                channel_count = channel_index - 1
+
+                break
+
+        return channel_count
+
+
+    def _check_binary_waveform_support(self) -> bool:
+        try:
+            self._write_raw(":WAVeform:FORMat WORD")
+            binary_supported = True
+        except Exception:
+            binary_supported = False
+
+        return binary_supported
+
+
+    def disconnect(self):
+        if self._instrument is not None:
+            try:
+                self._instrument.close()
+            except Exception:
+                pass
+
+        if self._resource_manager is not None:
+            try:
+                self._resource_manager.close()
+            except Exception:
+                pass
+
+        self._is_connected = False
+        self._instrument = None
+        self._resource_manager = None
+
+
+    def _is_safe_to_operate(self) -> bool:
+        if not self._is_connected:
+            safe_to_operate = False
+        elif self._instrument is None:
+            safe_to_operate = False
+        else:
+            safe_to_operate = True
+
+        return safe_to_operate
+
+
+    def _write_raw(self, command: str):
+        if self._is_safe_to_operate():
+            self._instrument.write(command)
+
+
+    def _read_raw(self) -> str:
+        if not self._is_safe_to_operate():
+            read_result = ""
+        else:
+            try:
+                read_result = self._instrument.read().strip()
+            except Exception:
+                read_result = ""
+
+        return read_result
+
+
+    def _query_string(self, command: str) -> str:
+        if not self._is_safe_to_operate():
+            query_result = ""
+        else:
+            self._write_raw(command)
+            query_result = self._read_raw()
+
+        return query_result
+
+
+    def _query_float(self, command: str) -> float:
+        if not self._is_safe_to_operate():
+            query_result = 0.0
+        else:
+            response = self._query_string(command)
+
+            try:
+                query_result = float(response)
+            except Exception:
+                query_result = 0.0
+
+        return query_result
+
+
+    def _query_integer(self, command: str) -> int:
+        if not self._is_safe_to_operate():
+            query_result = 0
+        else:
+            response = self._query_string(command)
+
+            try:
+                query_result = int(float(response))
+            except Exception:
+                query_result = 0
+
+        return query_result
+
+
+    def _query_boolean(self, command: str) -> bool:
+        if not self._is_safe_to_operate():
+            query_result = False
+        else:
+            response = self._query_string(command)
+            query_result = response == "1"
+
+        return query_result
+
+
+    def _wait_for_operation_complete(self, timeout_seconds: float = 10.0) -> bool:
+        if not self._is_safe_to_operate():
+            operation_complete = False
+        else:
+            start_time = time.time()
+            operation_complete = False
+
+            while time.time() - start_time < timeout_seconds:
+                try:
+                    self._write_raw("*OPC?")
+                    response = self._read_raw()
+
+                    if response == "1":
+                        operation_complete = True
+
+                        break
+
+                    time.sleep(0.1)
+                except Exception:
+                    time.sleep(0.1)
+
+        return operation_complete
+
+
+    def _wait_for_acquisition_complete(self, timeout_seconds: float = 30.0) -> bool:
+        if not self._is_safe_to_operate():
+            acquisition_complete = False
+        else:
+            start_time = time.time()
+            acquisition_complete = False
+
+            while time.time() - start_time < timeout_seconds:
+                try:
+                    self._write_raw(":ACQuire:COMPlete?")
+                    completion_percent = int(self._read_raw())
+
+                    if completion_percent >= 100:
+                        acquisition_complete = True
+
+                        break
+
+                    time.sleep(0.1)
+                except Exception:
+                    time.sleep(0.1)
+
+        return acquisition_complete
+
+
+    def _ensure_trigger_is_stable(self, timeout_seconds: float = 5.0) -> bool:
+        if not self._is_safe_to_operate():
+            trigger_stable = False
+        else:
+            start_time = time.time()
+            trigger_stable = False
+
+            while time.time() - start_time < timeout_seconds:
+                try:
+                    self._write_raw(":TRIGger:STATus?")
+                    trigger_status = self._read_raw()
+
+                    if trigger_status.upper() == "STOP" or trigger_status.upper() == "AUTO":
+                        trigger_stable = True
+
+                        break
+
+                    time.sleep(0.1)
+                except Exception:
+                    time.sleep(0.1)
+
+        return trigger_stable
+
+
     def set_timeout(self, milliseconds: int):
-        self.timeout_milliseconds = milliseconds
+        self._timeout_milliseconds = milliseconds
 
-        if self.instrument:
-            self.instrument.timeout = milliseconds
+        if self._is_safe_to_operate():
+            try:
+                self._instrument.timeout = milliseconds
+            except Exception:
+                pass
 
 
-    def identification(self) -> str:
-        if not self.is_connected or self.instrument is None:
-            return ""
-
-        self.instrument.write('*IDN?')
-        time.sleep(0.2)
-        identification_string = self.instrument.read()
+    def get_identification(self) -> str:
+        identification_string = self._query_string("*IDN?")
 
         return identification_string
 
 
     def reset(self):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write('*RST')
-        time.sleep(0.1)
+        if self._is_safe_to_operate():
+            self._write_raw("*RST")
+            self._wait_for_operation_complete(5.0)
 
 
     def self_test(self) -> bool:
-        if not self.is_connected or self.instrument is None:
-            return False
+        if not self._is_safe_to_operate():
+            test_passed = False
+        else:
+            self._write_raw("*TST?")
+            test_result = self._read_raw()
+            test_passed = test_result == "0"
 
-        self.instrument.write('*TST?')
-        time.sleep(0.2)
-        test_result = self.instrument.read() == '0'
-
-        return test_result
-
-
-    def clear_status(self):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write('*CLS')
+        return test_passed
 
 
-    def get_error(self) -> str:
-        if not self.is_connected or self.instrument is None:
-            return ""
+    def clear_errors(self):
+        if self._is_safe_to_operate():
+            self._write_raw("*CLS")
 
-        self.instrument.write(':SYSTem:ERRor?')
-        time.sleep(0.2)
-        error_message = self.instrument.read()
+
+    def get_next_error(self) -> str:
+        error_message = self._query_string(":SYSTem:ERRor?")
 
         return error_message
 
 
-    def wait_for_operation_complete(self):
-        if not self.is_connected or self.instrument is None:
-            return
+    def get_all_errors(self) -> List[str]:
+        if not self._is_safe_to_operate():
+            error_list = []
+        else:
+            error_list = []
 
-        self.instrument.write('*OPC?')
-        time.sleep(0.2)
-        self.instrument.read()
+            while True:
+                single_error = self.get_next_error()
 
+                if "No error" in single_error or not single_error:
+                    break
 
-    def set_channel_display(self, channel_number: int, enable_status: bool):
-        if not self.is_connected or self.instrument is None:
-            return
+                error_list.append(single_error)
 
-        self.instrument.write(f':CHANnel{channel_number}:DISPlay {1 if enable_status else 0}')
-
-
-    def get_channel_display(self, channel_number: int) -> bool:
-        if not self.is_connected or self.instrument is None:
-            return False
-
-        self.instrument.write(f':CHANnel{channel_number}:DISPlay?')
-        time.sleep(0.2)
-        display_status = self.instrument.read() == '1'
-
-        return display_status
+        return error_list
 
 
-    def set_channel_scale(self, channel_number: int, scale_volts: float):
-        if not self.is_connected or self.instrument is None:
-            return
+    def is_acquisition_complete(self) -> bool:
+        if not self._is_safe_to_operate():
+            acquisition_complete = False
+        else:
+            completion_percent = self._query_integer(":ACQuire:COMPlete?")
+            acquisition_complete = completion_percent >= 100
 
-        self.instrument.write(f':CHANnel{channel_number}:SCALe {scale_volts}')
+        return acquisition_complete
+
+
+    def set_channel_enabled(self, channel_number: int, enable_status: bool):
+        if self._is_safe_to_operate():
+            if channel_number >= 1 and channel_number <= self._capabilities.get("maximum_channels", 4):
+                self._write_raw(f":CHANnel{channel_number}:DISPlay {1 if enable_status else 0}")
+                time.sleep(0.1)
+
+
+    def is_channel_enabled(self, channel_number: int) -> bool:
+        if not self._is_safe_to_operate():
+            enabled_status = False
+        elif channel_number < 1 or channel_number > self._capabilities.get("maximum_channels", 4):
+            enabled_status = False
+        else:
+            enabled_status = self._query_boolean(f":CHANnel{channel_number}:DISPlay?")
+
+        return enabled_status
+
+
+    def set_channel_scale(self, channel_number: int, volts_per_division: float):
+        if self._is_safe_to_operate():
+            if channel_number >= 1 and channel_number <= self._capabilities.get("maximum_channels", 4):
+                if volts_per_division > 0:
+                    self._write_raw(f":CHANnel{channel_number}:SCALe {volts_per_division}")
 
 
     def get_channel_scale(self, channel_number: int) -> float:
-        if not self.is_connected or self.instrument is None:
-            return 0.0
-
-        self.instrument.write(f':CHANnel{channel_number}:SCALe?')
-        time.sleep(0.2)
-        scale_value = float(self.instrument.read())
+        if not self._is_safe_to_operate():
+            scale_value = 0.0
+        elif channel_number < 1 or channel_number > self._capabilities.get("maximum_channels", 4):
+            scale_value = 0.0
+        else:
+            scale_value = self._query_float(f":CHANnel{channel_number}:SCALe?")
 
         return scale_value
 
 
     def set_channel_offset(self, channel_number: int, offset_volts: float):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(f':CHANnel{channel_number}:OFFSet {offset_volts}')
+        if self._is_safe_to_operate():
+            if channel_number >= 1 and channel_number <= self._capabilities.get("maximum_channels", 4):
+                self._write_raw(f":CHANnel{channel_number}:OFFSet {offset_volts}")
 
 
     def get_channel_offset(self, channel_number: int) -> float:
-        if not self.is_connected or self.instrument is None:
-            return 0.0
-
-        self.instrument.write(f':CHANnel{channel_number}:OFFSet?')
-        time.sleep(0.2)
-        offset_value = float(self.instrument.read())
+        if not self._is_safe_to_operate():
+            offset_value = 0.0
+        elif channel_number < 1 or channel_number > self._capabilities.get("maximum_channels", 4):
+            offset_value = 0.0
+        else:
+            offset_value = self._query_float(f":CHANnel{channel_number}:OFFSet?")
 
         return offset_value
 
 
     def set_channel_coupling(self, channel_number: int, coupling_type: str):
-        if not self.is_connected or self.instrument is None:
-            return
+        valid_coupling_types = [self.coupling_type_ac, self.coupling_type_dc, self.coupling_type_ground]
 
-        self.instrument.write(f':CHANnel{channel_number}:COUPling {coupling_type}')
+        if self._is_safe_to_operate():
+            if channel_number >= 1 and channel_number <= self._capabilities.get("maximum_channels", 4):
+                if coupling_type in valid_coupling_types:
+                    self._write_raw(f":CHANnel{channel_number}:COUPling {coupling_type}")
 
 
     def get_channel_coupling(self, channel_number: int) -> str:
-        if not self.is_connected or self.instrument is None:
-            return ""
-
-        self.instrument.write(f':CHANnel{channel_number}:COUPling?')
-        time.sleep(0.2)
-        coupling_value = self.instrument.read().strip()
+        if not self._is_safe_to_operate():
+            coupling_value = ""
+        elif channel_number < 1 or channel_number > self._capabilities.get("maximum_channels", 4):
+            coupling_value = ""
+        else:
+            coupling_value = self._query_string(f":CHANnel{channel_number}:COUPling?")
 
         return coupling_value
 
 
     def set_channel_impedance(self, channel_number: int, impedance_ohms: float):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(f':CHANnel{channel_number}:IMPedance {impedance_ohms}')
+        if self._is_safe_to_operate():
+            if channel_number >= 1 and channel_number <= self._capabilities.get("maximum_channels", 4):
+                if impedance_ohms in [50.0, 1000000.0]:
+                    self._write_raw(f":CHANnel{channel_number}:IMPedance {impedance_ohms}")
 
 
     def get_channel_impedance(self, channel_number: int) -> float:
-        if not self.is_connected or self.instrument is None:
-            return 0.0
-
-        self.instrument.write(f':CHANnel{channel_number}:IMPedance?')
-        time.sleep(0.2)
-        impedance_value = float(self.instrument.read())
+        if not self._is_safe_to_operate():
+            impedance_value = 0.0
+        elif channel_number < 1 or channel_number > self._capabilities.get("maximum_channels", 4):
+            impedance_value = 0.0
+        else:
+            impedance_value = self._query_float(f":CHANnel{channel_number}:IMPedance?")
 
         return impedance_value
 
 
-    def set_channel_probe(self, channel_number: int, attenuation_factor: float):
-        if not self.is_connected or self.instrument is None:
-            return
+    def set_channel_probe_attenuation(self, channel_number: int, attenuation_factor: float):
+        if self._is_safe_to_operate():
+            if channel_number >= 1 and channel_number <= self._capabilities.get("maximum_channels", 4):
+                if attenuation_factor > 0:
+                    self._write_raw(f":CHANnel{channel_number}:PROBe {attenuation_factor}")
 
-        self.instrument.write(f':CHANnel{channel_number}:PROBe {attenuation_factor}')
 
-
-    def get_channel_probe(self, channel_number: int) -> float:
-        if not self.is_connected or self.instrument is None:
-            return 0.0
-
-        self.instrument.write(f':CHANnel{channel_number}:PROBe?')
-        time.sleep(0.2)
-        attenuation_value = float(self.instrument.read())
+    def get_channel_probe_attenuation(self, channel_number: int) -> float:
+        if not self._is_safe_to_operate():
+            attenuation_value = 0.0
+        elif channel_number < 1 or channel_number > self._capabilities.get("maximum_channels", 4):
+            attenuation_value = 0.0
+        else:
+            attenuation_value = self._query_float(f":CHANnel{channel_number}:PROBe?")
 
         return attenuation_value
 
 
-    def set_channel_invert(self, channel_number: int, invert_status: bool):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(f':CHANnel{channel_number}:INVert {1 if invert_status else 0}')
-
-
-    def get_channel_invert(self, channel_number: int) -> bool:
-        if not self.is_connected or self.instrument is None:
-            return False
-
-        self.instrument.write(f':CHANnel{channel_number}:INVert?')
-        time.sleep(0.2)
-        invert_status = self.instrument.read() == '1'
-
-        return invert_status
+    def set_channel_inverted(self, channel_number: int, invert_status: bool):
+        if self._is_safe_to_operate():
+            if channel_number >= 1 and channel_number <= self._capabilities.get("maximum_channels", 4):
+                self._write_raw(f":CHANnel{channel_number}:INVert {1 if invert_status else 0}")
 
 
-    def set_channel_bandwidth(self, channel_number: int, bandwidth_limit: str):
-        if not self.is_connected or self.instrument is None:
-            return
+    def is_channel_inverted(self, channel_number: int) -> bool:
+        if not self._is_safe_to_operate():
+            inverted_status = False
+        elif channel_number < 1 or channel_number > self._capabilities.get("maximum_channels", 4):
+            inverted_status = False
+        else:
+            inverted_status = self._query_boolean(f":CHANnel{channel_number}:INVert?")
 
-        self.instrument.write(f':CHANnel{channel_number}:BANDwidth {bandwidth_limit}')
+        return inverted_status
 
 
-    def get_channel_bandwidth(self, channel_number: int) -> str:
-        if not self.is_connected or self.instrument is None:
-            return ""
+    def set_channel_bandwidth_limit(self, channel_number: int, bandwidth_limit: str):
+        valid_limits = [
+            self.bandwidth_limit_full,
+            self.bandwidth_limit_twenty_megahertz,
+            self.bandwidth_limit_one_hundred_megahertz,
+            self.bandwidth_limit_two_hundred_megahertz
+        ]
 
-        self.instrument.write(f':CHANnel{channel_number}:BANDwidth?')
-        time.sleep(0.2)
-        bandwidth_value = self.instrument.read().strip()
+        if self._is_safe_to_operate():
+            if channel_number >= 1 and channel_number <= self._capabilities.get("maximum_channels", 4):
+                if bandwidth_limit in valid_limits:
+                    self._write_raw(f":CHANnel{channel_number}:BANDwidth {bandwidth_limit}")
+
+
+    def get_channel_bandwidth_limit(self, channel_number: int) -> str:
+        if not self._is_safe_to_operate():
+            bandwidth_value = ""
+        elif channel_number < 1 or channel_number > self._capabilities.get("maximum_channels", 4):
+            bandwidth_value = ""
+        else:
+            bandwidth_value = self._query_string(f":CHANnel{channel_number}:BANDwidth?")
 
         return bandwidth_value
 
 
     def set_channel_label(self, channel_number: int, label_text: str):
-        if not self.is_connected or self.instrument is None:
-            return
+        if self._is_safe_to_operate():
+            if channel_number >= 1 and channel_number <= self._capabilities.get("maximum_channels", 4):
+                if len(label_text) > 10:
+                    label_text = label_text[:10]
 
-        self.instrument.write(f':CHANnel{channel_number}:LABel "{label_text}"')
+                self._write_raw(f":CHANnel{channel_number}:LABel \"{label_text}\"")
 
 
     def get_channel_label(self, channel_number: int) -> str:
-        if not self.is_connected or self.instrument is None:
-            return ""
-
-        self.instrument.write(f':CHANnel{channel_number}:LABel?')
-        time.sleep(0.2)
-        label_value = self.instrument.read().strip().strip('"')
+        if not self._is_safe_to_operate():
+            label_value = ""
+        elif channel_number < 1 or channel_number > self._capabilities.get("maximum_channels", 4):
+            label_value = ""
+        else:
+            label_value = self._query_string(f":CHANnel{channel_number}:LABel?").strip("\"")
 
         return label_value
 
 
     def auto_scale(self):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(':AUToscale')
-        time.sleep(1)
+        if self._is_safe_to_operate():
+            self._write_raw(":AUToscale")
+            self._wait_for_operation_complete(10.0)
 
 
     def set_timebase_scale(self, seconds_per_division: float):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(f':TIMebase:SCALe {seconds_per_division}')
+        if self._is_safe_to_operate():
+            if seconds_per_division > 0:
+                self._write_raw(f":TIMebase:SCALe {seconds_per_division}")
 
 
     def get_timebase_scale(self) -> float:
-        if not self.is_connected or self.instrument is None:
-            return 0.0
-
-        self.instrument.write(':TIMebase:SCALe?')
-        time.sleep(0.2)
-        scale_value = float(self.instrument.read())
+        if not self._is_safe_to_operate():
+            scale_value = 0.0
+        else:
+            scale_value = self._query_float(":TIMebase:SCALe?")
 
         return scale_value
 
 
     def set_timebase_delay(self, delay_seconds: float):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(f':TIMebase:DELay {delay_seconds}')
+        if self._is_safe_to_operate():
+            self._write_raw(f":TIMebase:DELay {delay_seconds}")
 
 
     def get_timebase_delay(self) -> float:
-        if not self.is_connected or self.instrument is None:
-            return 0.0
-
-        self.instrument.write(':TIMebase:DELay?')
-        time.sleep(0.2)
-        delay_value = float(self.instrument.read())
+        if not self._is_safe_to_operate():
+            delay_value = 0.0
+        else:
+            delay_value = self._query_float(":TIMebase:DELay?")
 
         return delay_value
 
 
     def set_timebase_reference(self, reference_position: str):
-        if not self.is_connected or self.instrument is None:
-            return
+        valid_positions = ["LEFT", "CENTER", "RIGHT"]
 
-        self.instrument.write(f':TIMebase:REFerence {reference_position}')
+        if self._is_safe_to_operate():
+            if reference_position.upper() in valid_positions:
+                self._write_raw(f":TIMebase:REFerence {reference_position}")
 
 
     def get_timebase_reference(self) -> str:
-        if not self.is_connected or self.instrument is None:
-            return ""
-
-        self.instrument.write(':TIMebase:REFerence?')
-        time.sleep(0.2)
-        reference_value = self.instrument.read().strip()
+        if not self._is_safe_to_operate():
+            reference_value = ""
+        else:
+            reference_value = self._query_string(":TIMebase:REFerence?")
 
         return reference_value
 
 
-    def set_timebase_mode(self, mode_type: str):
-        if not self.is_connected or self.instrument is None:
-            return
+    def set_timebase_mode(self, timebase_mode: str):
+        valid_modes = [
+            self.timebase_mode_main,
+            self.timebase_mode_window,
+            self.timebase_mode_xy,
+            self.timebase_mode_roll
+        ]
 
-        self.instrument.write(f':TIMebase:MODE {mode_type}')
+        if self._is_safe_to_operate():
+            if timebase_mode in valid_modes:
+                self._write_raw(f":TIMebase:MODE {timebase_mode}")
 
 
     def get_timebase_mode(self) -> str:
-        if not self.is_connected or self.instrument is None:
-            return ""
-
-        self.instrument.write(':TIMebase:MODE?')
-        time.sleep(0.2)
-        mode_value = self.instrument.read().strip()
+        if not self._is_safe_to_operate():
+            mode_value = ""
+        else:
+            mode_value = self._query_string(":TIMebase:MODE?")
 
         return mode_value
 
 
     def run_acquisition(self):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(':RUN')
+        if self._is_safe_to_operate():
+            self._write_raw(":RUN")
 
 
     def stop_acquisition(self):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(':STOP')
+        if self._is_safe_to_operate():
+            self._write_raw(":STOP")
 
 
     def single_acquisition(self):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(':SINGle')
+        if self._is_safe_to_operate():
+            self._write_raw(":SINGle")
+            self._wait_for_operation_complete(5.0)
 
 
     def force_trigger(self):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(':TRIGger:FORCe')
+        if self._is_safe_to_operate():
+            self._write_raw(":TRIGger:FORCe")
 
 
     def set_trigger_source(self, source_channel: str):
-        if not self.is_connected or self.instrument is None:
-            return
+        valid_sources = ["CHAN1", "CHAN2", "CHAN3", "CHAN4", "LINE", "EXT", "EXT5"]
 
-        self.instrument.write(f':TRIGger:SOURce {source_channel}')
+        if self._is_safe_to_operate():
+            if source_channel.upper() in valid_sources:
+                self._write_raw(f":TRIGger:SOURce {source_channel.upper()}")
 
 
     def get_trigger_source(self) -> str:
-        if not self.is_connected or self.instrument is None:
-            return ""
-
-        self.instrument.write(':TRIGger:SOURce?')
-        time.sleep(0.2)
-        source_value = self.instrument.read().strip()
+        if not self._is_safe_to_operate():
+            source_value = ""
+        else:
+            source_value = self._query_string(":TRIGger:SOURce?")
 
         return source_value
 
 
     def set_trigger_level(self, level_volts: float):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(f':TRIGger:LEVel {level_volts}')
+        if self._is_safe_to_operate():
+            self._write_raw(f":TRIGger:LEVel {level_volts}")
 
 
     def get_trigger_level(self) -> float:
-        if not self.is_connected or self.instrument is None:
-            return 0.0
-
-        self.instrument.write(':TRIGger:LEVel?')
-        time.sleep(0.2)
-        level_value = float(self.instrument.read())
+        if not self._is_safe_to_operate():
+            level_value = 0.0
+        else:
+            level_value = self._query_float(":TRIGger:LEVel?")
 
         return level_value
 
 
     def set_trigger_slope(self, slope_direction: str):
-        if not self.is_connected or self.instrument is None:
-            return
+        valid_slopes = [self.trigger_slope_positive, self.trigger_slope_negative, self.trigger_slope_either]
 
-        self.instrument.write(f':TRIGger:SLOPe {slope_direction}')
+        if self._is_safe_to_operate():
+            if slope_direction in valid_slopes:
+                self._write_raw(f":TRIGger:SLOPe {slope_direction}")
 
 
     def get_trigger_slope(self) -> str:
-        if not self.is_connected or self.instrument is None:
-            return ""
-
-        self.instrument.write(':TRIGger:SLOPe?')
-        time.sleep(0.2)
-        slope_value = self.instrument.read().strip()
+        if not self._is_safe_to_operate():
+            slope_value = ""
+        else:
+            slope_value = self._query_string(":TRIGger:SLOPe?")
 
         return slope_value
 
 
     def set_trigger_mode(self, mode_type: str):
-        if not self.is_connected or self.instrument is None:
-            return
+        valid_modes = [self.trigger_mode_auto, self.trigger_mode_normal, self.trigger_mode_single]
 
-        self.instrument.write(f':TRIGger:MODE {mode_type}')
+        if self._is_safe_to_operate():
+            if mode_type in valid_modes:
+                self._write_raw(f":TRIGger:MODE {mode_type}")
 
 
     def get_trigger_mode(self) -> str:
-        if not self.is_connected or self.instrument is None:
-            return ""
-
-        self.instrument.write(':TRIGger:MODE?')
-        time.sleep(0.2)
-        mode_value = self.instrument.read().strip()
+        if not self._is_safe_to_operate():
+            mode_value = ""
+        else:
+            mode_value = self._query_string(":TRIGger:MODE?")
 
         return mode_value
 
 
     def set_trigger_coupling(self, coupling_type: str):
-        if not self.is_connected or self.instrument is None:
-            return
+        valid_coupling = [self.coupling_type_ac, self.coupling_type_dc, self.coupling_type_ground]
 
-        self.instrument.write(f':TRIGger:COUPling {coupling_type}')
+        if self._is_safe_to_operate():
+            if coupling_type in valid_coupling:
+                self._write_raw(f":TRIGger:COUPling {coupling_type}")
 
 
     def get_trigger_coupling(self) -> str:
-        if not self.is_connected or self.instrument is None:
-            return ""
-
-        self.instrument.write(':TRIGger:COUPling?')
-        time.sleep(0.2)
-        coupling_value = self.instrument.read().strip()
+        if not self._is_safe_to_operate():
+            coupling_value = ""
+        else:
+            coupling_value = self._query_string(":TRIGger:COUPling?")
 
         return coupling_value
 
 
     def set_trigger_holdoff(self, holdoff_seconds: float):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(f':TRIGger:HOLDoff {holdoff_seconds}')
+        if self._is_safe_to_operate():
+            if holdoff_seconds >= 0:
+                self._write_raw(f":TRIGger:HOLDoff {holdoff_seconds}")
 
 
     def get_trigger_holdoff(self) -> float:
-        if not self.is_connected or self.instrument is None:
-            return 0.0
-
-        self.instrument.write(':TRIGger:HOLDoff?')
-        time.sleep(0.2)
-        holdoff_value = float(self.instrument.read())
+        if not self._is_safe_to_operate():
+            holdoff_value = 0.0
+        else:
+            holdoff_value = self._query_float(":TRIGger:HOLDoff?")
 
         return holdoff_value
 
 
-    def set_acquire_type(self, acquisition_type: str):
-        if not self.is_connected or self.instrument is None:
-            return
+    def set_acquisition_type(self, acquisition_type: str):
+        valid_types = [
+            self.acquisition_type_normal,
+            self.acquisition_type_average,
+            self.acquisition_type_peak,
+            self.acquisition_type_high_resolution
+        ]
 
-        self.instrument.write(f':ACQuire:TYPE {acquisition_type}')
+        if self._is_safe_to_operate():
+            if acquisition_type in valid_types:
+                self._write_raw(f":ACQuire:TYPE {acquisition_type}")
 
 
-    def get_acquire_type(self) -> str:
-        if not self.is_connected or self.instrument is None:
-            return ""
-
-        self.instrument.write(':ACQuire:TYPE?')
-        time.sleep(0.2)
-        type_value = self.instrument.read().strip()
+    def get_acquisition_type(self) -> str:
+        if not self._is_safe_to_operate():
+            type_value = ""
+        else:
+            type_value = self._query_string(":ACQuire:TYPE?")
 
         return type_value
 
 
-    def set_acquire_type_normal(self):
-        self.set_acquire_type('NORMal')
+    def set_average_count(self, averages_number: int):
+        if self._is_safe_to_operate():
+            if averages_number < 1:
+                averages_number = 1
 
+            if averages_number > 65536:
+                averages_number = 65536
 
-    def set_acquire_type_average(self):
-        self.set_acquire_type('AVERage')
+            self.set_acquisition_type(self.acquisition_type_normal)
+            time.sleep(0.05)
 
+            self._write_raw(f":ACQuire:COUNt {averages_number}")
+            time.sleep(0.05)
 
-    def set_acquire_type_peak(self):
-        self.set_acquire_type('PEAK')
-
-
-    def set_acquire_type_high_resolution(self):
-        self.set_acquire_type('HRESolution')
-
-
-    def set_average_count(self, number_of_averages: int):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(f':ACQuire:COUNt {number_of_averages}')
+            self.set_acquisition_type(self.acquisition_type_average)
+            time.sleep(0.05)
 
 
     def get_average_count(self) -> int:
-        if not self.is_connected or self.instrument is None:
-            return 0
-
-        self.instrument.write(':ACQuire:COUNt?')
-        time.sleep(0.2)
-        count_value = int(self.instrument.read())
+        if not self._is_safe_to_operate():
+            count_value = 0
+        else:
+            count_value = self._query_integer(":ACQuire:COUNt?")
 
         return count_value
 
 
-    def set_acquire_complete(self, completion_percent: int = 100):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(f':ACQuire:COMPlete {completion_percent}')
-
-
-    def get_acquire_complete(self) -> int:
-        if not self.is_connected or self.instrument is None:
-            return 0
-
-        self.instrument.write(':ACQuire:COMPlete?')
-        time.sleep(0.2)
-        percent_value = int(self.instrument.read())
-
-        return percent_value
-
-
-    def measure(self, parameter_name: str, channel_number: int = 1, timeout_milliseconds: int = 5000) -> Optional[float]:
-        result_value = None
-
-        valid_parameters = [
-            'VPP',
-            'VMAX',
-            'VMIN',
-            'VRMS',
-            'FREQuency',
-            'PERiod',
-            'RISetime',
-            'FALLtime',
-            'PWIDth',
-            'NWIDth',
-            'DUTYcycle',
-            'MEAN',
-            'RMS',
-            'OVERS',
-            'PREShoot',
-            'DELay',
-            'PHASe'
-        ]
-
-        if parameter_name.upper() in valid_parameters:
+    def measure_parameter(self, measurement_parameter: str, channel_number: int = 1) -> Optional[float]:
+        if not self._is_safe_to_operate():
+            measurement_result = None
+        elif channel_number < 1 or channel_number > self._capabilities.get("maximum_channels", 4):
+            measurement_result = None
+        else:
             try:
-                old_timeout = self.instrument.timeout
-                self.instrument.timeout = timeout_milliseconds
-                self.instrument.write(f':MEASure:{parameter_name}? CHAN{channel_number}')
-                time.sleep(0.2)
+                old_timeout = self._instrument.timeout
+                self._instrument.timeout = self._timeout_milliseconds
 
-                measurement_result = self.instrument.read()
-                result_value = float(measurement_result) if measurement_result else None
+                result = self._query_float(f":MEASure:{measurement_parameter}? CHAN{channel_number}")
 
-                self.instrument.timeout = old_timeout
-            except:
-                result_value = None
+                self._instrument.timeout = old_timeout
 
-        return result_value
+                if result == 0.0:
+                    measurement_result = None
+                else:
+                    measurement_result = result
+            except Exception:
+                measurement_result = None
 
-
-    def measure_peak_to_peak(self, channel_number: int = 1) -> Optional[float]:
-        result_value = self.measure('VPP', channel_number)
-
-        return result_value
+        return measurement_result
 
 
-    def measure_maximum(self, channel_number: int = 1) -> Optional[float]:
-        result_value = self.measure('VMAX', channel_number)
+    def measure_voltage_peak_to_peak(self, channel_number: int = 1) -> Optional[float]:
+        measurement_result = self.measure_parameter(self.measurement_parameter_voltage_peak_to_peak, channel_number)
 
-        return result_value
-
-
-    def measure_minimum(self, channel_number: int = 1) -> Optional[float]:
-        result_value = self.measure('VMIN', channel_number)
-
-        return result_value
+        return measurement_result
 
 
-    def measure_rms(self, channel_number: int = 1) -> Optional[float]:
-        result_value = self.measure('VRMS', channel_number)
+    def measure_voltage_maximum(self, channel_number: int = 1) -> Optional[float]:
+        measurement_result = self.measure_parameter(self.measurement_parameter_voltage_maximum, channel_number)
 
-        return result_value
+        return measurement_result
+
+
+    def measure_voltage_minimum(self, channel_number: int = 1) -> Optional[float]:
+        measurement_result = self.measure_parameter(self.measurement_parameter_voltage_minimum, channel_number)
+
+        return measurement_result
+
+
+    def measure_voltage_rms(self, channel_number: int = 1) -> Optional[float]:
+        measurement_result = self.measure_parameter(self.measurement_parameter_voltage_rms, channel_number)
+
+        return measurement_result
 
 
     def measure_frequency(self, channel_number: int = 1) -> Optional[float]:
-        result_value = self.measure('FREQuency', channel_number)
+        measurement_result = self.measure_parameter(self.measurement_parameter_frequency, channel_number)
 
-        return result_value
+        return measurement_result
 
 
     def measure_period(self, channel_number: int = 1) -> Optional[float]:
-        result_value = self.measure('PERiod', channel_number)
+        measurement_result = self.measure_parameter(self.measurement_parameter_period, channel_number)
 
-        return result_value
+        return measurement_result
 
 
     def measure_rise_time(self, channel_number: int = 1) -> Optional[float]:
-        result_value = self.measure('RISetime', channel_number)
+        measurement_result = self.measure_parameter(self.measurement_parameter_rise_time, channel_number)
 
-        return result_value
+        return measurement_result
 
 
     def measure_fall_time(self, channel_number: int = 1) -> Optional[float]:
-        result_value = self.measure('FALLtime', channel_number)
+        measurement_result = self.measure_parameter(self.measurement_parameter_fall_time, channel_number)
 
-        return result_value
+        return measurement_result
 
 
     def measure_positive_width(self, channel_number: int = 1) -> Optional[float]:
-        result_value = self.measure('PWIDth', channel_number)
+        measurement_result = self.measure_parameter(self.measurement_parameter_positive_width, channel_number)
 
-        return result_value
+        return measurement_result
 
 
     def measure_negative_width(self, channel_number: int = 1) -> Optional[float]:
-        result_value = self.measure('NWIDth', channel_number)
+        measurement_result = self.measure_parameter(self.measurement_parameter_negative_width, channel_number)
 
-        return result_value
+        return measurement_result
 
 
     def measure_duty_cycle(self, channel_number: int = 1) -> Optional[float]:
-        result_value = self.measure('DUTYcycle', channel_number)
+        measurement_result = self.measure_parameter(self.measurement_parameter_duty_cycle, channel_number)
 
-        return result_value
-
-
-    def measure_mean(self, channel_number: int = 1) -> Optional[float]:
-        result_value = self.measure('MEAN', channel_number)
-
-        return result_value
+        return measurement_result
 
 
-    def measure_rms_ac(self, channel_number: int = 1) -> Optional[float]:
-        result_value = self.measure('RMS', channel_number)
+    def measure_mean_voltage(self, channel_number: int = 1) -> Optional[float]:
+        measurement_result = self.measure_parameter(self.measurement_parameter_mean_voltage, channel_number)
 
-        return result_value
-
-
-    def measure_phase(self, source_one: str = 'CHAN1', source_two: str = 'CHAN2') -> Optional[float]:
-        result_value = None
-
-        try:
-            self.instrument.write(f':MEASure:PHASe? {source_one},{source_two}')
-            time.sleep(0.2)
-            phase_result = self.instrument.read()
-            result_value = float(phase_result) if phase_result else None
-        except:
-            result_value = None
-
-        return result_value
+        return measurement_result
 
 
-    def measure_delay(self, source_one: str = 'CHAN1', source_two: str = 'CHAN2') -> Optional[float]:
-        result_value = None
+    def measure_phase(self, first_source: str = "CHAN1", second_source: str = "CHAN2") -> Optional[float]:
+        if not self._is_safe_to_operate():
+            phase_value = None
+        else:
+            try:
+                phase_value = self._query_float(f":MEASure:PHASe? {first_source},{second_source}")
+            except Exception:
+                phase_value = None
 
-        try:
-            self.instrument.write(f':MEASure:DELay? {source_one},{source_two}')
-            time.sleep(0.2)
-            delay_result = self.instrument.read()
-            result_value = float(delay_result) if delay_result else None
-        except:
-            result_value = None
+        return phase_value
 
-        return result_value
+
+    def measure_delay(self, first_source: str = "CHAN1", second_source: str = "CHAN2") -> Optional[float]:
+        if not self._is_safe_to_operate():
+            delay_value = None
+        else:
+            try:
+                delay_value = self._query_float(f":MEASure:DELay? {first_source},{second_source}")
+            except Exception:
+                delay_value = None
+
+        return delay_value
 
 
     def set_cursor_mode(self, cursor_mode: str):
-        if not self.is_connected or self.instrument is None:
-            return
+        valid_modes = [self.cursor_mode_off, self.cursor_mode_x, self.cursor_mode_y, self.cursor_mode_xy]
 
-        self.instrument.write(f':CURSor:MODE {cursor_mode}')
+        if self._is_safe_to_operate():
+            if cursor_mode in valid_modes:
+                self._write_raw(f":CURSor:MODE {cursor_mode}")
 
 
     def get_cursor_mode(self) -> str:
-        if not self.is_connected or self.instrument is None:
-            return ""
-
-        self.instrument.write(':CURSor:MODE?')
-        time.sleep(0.2)
-        mode_value = self.instrument.read().strip()
+        if not self._is_safe_to_operate():
+            mode_value = ""
+        else:
+            mode_value = self._query_string(":CURSor:MODE?")
 
         return mode_value
 
 
     def set_cursor_position(self, cursor_name: str, position_value: float):
-        if not self.is_connected or self.instrument is None:
-            return
+        valid_cursors = ["X1P", "X2P", "Y1P", "Y2P"]
 
-        self.instrument.write(f':CURSor:{cursor_name} {position_value}')
+        if self._is_safe_to_operate():
+            if cursor_name.upper() in valid_cursors:
+                self._write_raw(f":CURSor:{cursor_name} {position_value}")
 
 
     def get_cursor_position(self, cursor_name: str) -> float:
-        if not self.is_connected or self.instrument is None:
-            return 0.0
+        valid_cursors = ["X1P", "X2P", "Y1P", "Y2P"]
 
-        self.instrument.write(f':CURSor:{cursor_name}?')
-        time.sleep(0.2)
-        position_value = float(self.instrument.read())
+        if not self._is_safe_to_operate():
+            position_value = 0.0
+        elif cursor_name.upper() not in valid_cursors:
+            position_value = 0.0
+        else:
+            position_value = self._query_float(f":CURSor:{cursor_name}?")
 
         return position_value
 
 
-    def get_cursor_delta(self) -> Dict[str, float]:
-        if not self.is_connected or self.instrument is None:
-            return {'delta_x': 0.0, 'delta_y': 0.0, 'inverse_delta_x': 0.0}
-
-        self.instrument.write(':CURSor:XDELta?')
-        time.sleep(0.1)
-        delta_x = float(self.instrument.read())
-
-        self.instrument.write(':CURSor:YDELta?')
-        time.sleep(0.1)
-        delta_y = float(self.instrument.read())
-
-        self.instrument.write(':CURSor:INVXDELta?')
-        time.sleep(0.1)
-        inverse_delta_x = float(self.instrument.read())
-
-        delta_values = {
-            'delta_x': delta_x,
-            'delta_y': delta_y,
-            'inverse_delta_x': inverse_delta_x
-        }
+    def get_cursor_deltas(self) -> Dict[str, float]:
+        if not self._is_safe_to_operate():
+            delta_values = {"delta_x": 0.0, "delta_y": 0.0, "inverse_delta_x": 0.0}
+        else:
+            delta_values = {
+                "delta_x": self._query_float(":CURSor:XDELta?"),
+                "delta_y": self._query_float(":CURSor:YDELta?"),
+                "inverse_delta_x": self._query_float(":CURSor:INVXDELta?")
+            }
 
         return delta_values
 
 
     def set_math_function(self, math_function: str):
-        if not self.is_connected or self.instrument is None:
-            return
+        valid_functions = [
+            self.math_function_addition,
+            self.math_function_subtraction,
+            self.math_function_multiplication,
+            self.math_function_division,
+            self.math_function_fft
+        ]
 
-        self.instrument.write(f':MATH:FUNCtion {math_function}')
+        if self._is_safe_to_operate():
+            if math_function in valid_functions:
+                self._write_raw(f":MATH:FUNCtion {math_function}")
 
 
     def get_math_function(self) -> str:
-        if not self.is_connected or self.instrument is None:
-            return ""
-
-        self.instrument.write(':MATH:FUNCtion?')
-        time.sleep(0.2)
-        function_value = self.instrument.read().strip()
+        if not self._is_safe_to_operate():
+            function_value = ""
+        else:
+            function_value = self._query_string(":MATH:FUNCtion?")
 
         return function_value
 
 
-    def set_math_source(self, source_one: str, source_two: str = None):
-        if not self.is_connected or self.instrument is None:
-            return
+    def set_math_sources(self, first_source: str, second_source: str = None):
+        if self._is_safe_to_operate():
+            self._write_raw(f":MATH:SOURce1 {first_source}")
 
-        self.instrument.write(f':MATH:SOURce1 {source_one}')
-
-        if source_two:
-            self.instrument.write(f':MATH:SOURce2 {source_two}')
+            if second_source is not None:
+                self._write_raw(f":MATH:SOURce2 {second_source}")
 
 
     def set_math_scale(self, scale_value: float):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(f':MATH:SCALe {scale_value}')
+        if self._is_safe_to_operate():
+            if scale_value > 0:
+                self._write_raw(f":MATH:SCALe {scale_value}")
 
 
     def get_math_scale(self) -> float:
-        if not self.is_connected or self.instrument is None:
-            return 0.0
-
-        self.instrument.write(':MATH:SCALe?')
-        time.sleep(0.2)
-        scale_value = float(self.instrument.read())
+        if not self._is_safe_to_operate():
+            scale_value = 0.0
+        else:
+            scale_value = self._query_float(":MATH:SCALe?")
 
         return scale_value
 
 
     def set_math_offset(self, offset_value: float):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(f':MATH:OFFSet {offset_value}')
+        if self._is_safe_to_operate():
+            self._write_raw(f":MATH:OFFSet {offset_value}")
 
 
     def get_math_offset(self) -> float:
-        if not self.is_connected or self.instrument is None:
-            return 0.0
-
-        self.instrument.write(':MATH:OFFSet?')
-        time.sleep(0.2)
-        offset_value = float(self.instrument.read())
+        if not self._is_safe_to_operate():
+            offset_value = 0.0
+        else:
+            offset_value = self._query_float(":MATH:OFFSet?")
 
         return offset_value
 
 
     def set_math_fft_window(self, window_type: str):
-        if not self.is_connected or self.instrument is None:
-            return
+        valid_windows = [
+            self.fft_window_rectangular,
+            self.fft_window_hamming,
+            self.fft_window_hanning,
+            self.fft_window_blackman
+        ]
 
-        self.instrument.write(f':MATH:FFT:WINDow {window_type}')
+        if self._is_safe_to_operate():
+            if window_type in valid_windows:
+                self._write_raw(f":MATH:FFT:WINDow {window_type}")
+
+
+    def _get_waveform_preable(self) -> Dict[str, Any]:
+        if not self._is_safe_to_operate():
+            preable = {}
+        else:
+            self._write_raw(":WAVeform:PREamble?")
+            time.sleep(0.2)
+
+            preable_string = self._read_raw()
+
+            if not preable_string:
+                preable = {}
+            else:
+                preable_parts = preable_string.split(",")
+
+                if len(preable_parts) < 10:
+                    preable = {}
+                else:
+                    try:
+                        preable = {
+                            "format_code": int(preable_parts[0]),
+                            "acquisition_type": int(preable_parts[1]),
+                            "points_count": int(preable_parts[2]),
+                            "average_count": int(preable_parts[3]),
+                            "x_increment": float(preable_parts[4]),
+                            "x_origin": float(preable_parts[5]),
+                            "x_reference": float(preable_parts[6]),
+                            "y_increment": float(preable_parts[7]),
+                            "y_origin": float(preable_parts[8]),
+                            "y_reference": float(preable_parts[9])
+                        }
+                    except Exception:
+                        preable = {}
+
+        return preable
+
+
+    def _read_waveform_data(self, points_count: int = 2000) -> List[float]:
+        if not self._is_safe_to_operate():
+            voltage_values = []
+        else:
+            self._write_raw(f":WAVeform:POINts {points_count}")
+            self._write_raw(":WAVeform:FORMat ASCII")
+            self._write_raw(":WAVeform:DATA?")
+            time.sleep(0.3)
+
+            data_string = self._read_raw()
+
+            if data_string.startswith("#"):
+                header_length = int(data_string[1])
+                data_string = data_string[2 + header_length:]
+
+            if not data_string:
+                voltage_values = []
+            else:
+                voltage_values = [float(single_value) for single_value in data_string.strip().split(",")]
+
+        return voltage_values
 
 
     def capture_waveform(self, channel_number: int = 1, points_count: int = 2000) -> Tuple[List[float], List[float]]:
-        time_values = []
-        voltage_values = []
+        if not self._is_safe_to_operate():
+            time_values = []
+            voltage_values = []
+        elif channel_number < 1 or channel_number > self._capabilities.get("maximum_channels", 4):
+            time_values = []
+            voltage_values = []
+        else:
+            preable = self._get_waveform_preable()
 
-        if self.is_connected:
-            try:
-                self.instrument.write(':STOP')
-                time.sleep(0.05)
-
-                self.instrument.write(f':CHANnel{channel_number}:DISPlay 1')
-                self.instrument.write(':SINGle')
-
-                time.sleep(0.5)
-
-                self.instrument.write(f':WAVeform:SOURce CHAN{channel_number}')
-
-                try:
-                    self.instrument.write(':WAVeform:FORMat WORD')
-                    self.instrument.write(':WAVeform:BYTeorder LSBFirst')
-                    use_binary = True
-                except:
-                    self.instrument.write(':WAVeform:FORMat ASCII')
-                    use_binary = False
-
-                self.instrument.write(f':WAVeform:POINts {points_count}')
-
-                self.instrument.write(':WAVeform:PREamble?')
-                time.sleep(0.1)
-                preamble_string = self.instrument.read()
-                preamble_parts = preamble_string.split(',')
-
-                x_increment = float(preamble_parts[4])
-                x_origin = float(preamble_parts[5])
-                y_increment = float(preamble_parts[7])
-                y_origin = float(preamble_parts[8])
-
-                self.instrument.write(':WAVeform:DATA?')
-                time.sleep(0.3)
-
-                if use_binary:
-                    binary_data = self.instrument.read_binary_values(datatype='h', is_big_endian=False)
-                    voltage_values = [(value - y_origin) * y_increment for value in binary_data]
-                else:
-                    ascii_data = self.instrument.read()
-
-                    if ascii_data.startswith('#'):
-                        header_length = int(ascii_data[1])
-                        ascii_data = ascii_data[2 + header_length:]
-
-                    voltage_values = [float(value) for value in ascii_data.strip().split(',')]
-
-                time_values = [x_origin + index * x_increment for index in range(len(voltage_values))]
-            except Exception as error:
+            if not preable:
                 time_values = []
                 voltage_values = []
+            else:
+                voltage_values = self._read_waveform_data(points_count)
+
+                if not voltage_values:
+                    time_values = []
+                    voltage_values = []
+                else:
+                    x_increment = preable.get("x_increment", 1.0)
+                    x_origin = preable.get("x_origin", 0.0)
+
+                    time_values = [x_origin + index * x_increment for index in range(len(voltage_values))]
 
         return time_values, voltage_values
 
 
-    def acquire_waveform(self, channel_number: int = 1, points_count: int = 2000, binary_format: bool = False) -> Tuple[List[float], List[float]]:
-        time_axis, voltage_data = self.capture_waveform(channel_number, points_count)
+    def acquire_averaged_waveform(self, channel_number: int = 1, average_count: int = 64, points_count: int = 2000, timeout_seconds: float = 30.0) -> Tuple[List[float], List[float]]:
+        if not self._is_safe_to_operate():
+            time_values = []
+            voltage_values = []
+        elif channel_number < 1 or channel_number > self._capabilities.get("maximum_channels", 4):
+            time_values = []
+            voltage_values = []
+        elif not self._capabilities.get("has_average_mode", False):
+            time_values = []
+            voltage_values = []
+        else:
+            old_acquisition_type = self.get_acquisition_type()
+            old_average_count = self.get_average_count()
 
-        return time_axis, voltage_data
+            self.set_acquisition_type(self.acquisition_type_average)
+            self.set_average_count(average_count)
 
+            self.run_acquisition()
+            time.sleep(0.1)
 
-    def acquire_waveform_binary(self, channel_number: int = 1, points_count: int = 2000) -> Tuple[List[float], List[float]]:
-        time_axis, voltage_values = self.capture_waveform(channel_number, points_count)
+            start_time = time.time()
+            data_ready = False
 
-        return time_axis, voltage_values
+            while time.time() - start_time < timeout_seconds:
+                try:
+                    self._write_raw(":OPERation:CONDition?")
+                    response = self._read_raw()
 
+                    if response:
+                        status_value = int(response)
 
-    def setup_for_experiment(self, channel_number: int = 1, volts_per_division: float = 1.0, seconds_per_division: float = 0.01) -> bool:
-        operation_status = False
+                        if status_value & 16:
+                            data_ready = True
 
-        if self.is_connected:
-            try:
-                self.instrument.write(':STOP')
+                            break
+                except Exception:
+                    pass
+
                 time.sleep(0.05)
 
-                self.set_channel_display(channel_number, True)
-                self.set_channel_scale(channel_number, volts_per_division)
-                self.set_channel_offset(channel_number, 0)
-                self.set_channel_coupling(channel_number, "DC")
-                self.set_timebase_scale(seconds_per_division)
-                self.set_trigger_source(f"CHAN{channel_number}")
-                self.set_trigger_level(0)
-                self.set_trigger_slope("POS")
+            if not data_ready:
+                self.set_acquisition_type(old_acquisition_type)
+                self.set_average_count(old_average_count)
 
-                operation_status = True
-            except Exception as error:
-                operation_status = False
+                time_values = []
+                voltage_values = []
+            else:
+                preable = self._get_waveform_preable()
 
-        return operation_status
+                if not preable:
+                    self.set_acquisition_type(old_acquisition_type)
+                    self.set_average_count(old_average_count)
 
+                    time_values = []
+                    voltage_values = []
+                else:
+                    voltage_values = self._read_waveform_data(points_count)
 
-    def get_waveform_preamble(self) -> Dict[str, Any]:
-        if not self.is_connected or self.instrument is None:
-            return {}
+                    self.set_acquisition_type(old_acquisition_type)
+                    self.set_average_count(old_average_count)
 
-        self.instrument.write(':WAVeform:PREamble?')
-        time.sleep(0.2)
-        preamble_data = self.instrument.read().split(',')
+                    if not voltage_values:
+                        time_values = []
+                        voltage_values = []
+                    else:
+                        x_increment = preable.get("x_increment", 1.0)
+                        x_origin = preable.get("x_origin", 0.0)
 
-        preamble_parameters = {
-            'format_code': int(preamble_data[0]),
-            'acquisition_type': int(preamble_data[1]),
-            'points_count': int(preamble_data[2]),
-            'average_count': int(preamble_data[3]),
-            'x_increment': float(preamble_data[4]),
-            'x_origin': float(preamble_data[5]),
-            'x_reference': float(preamble_data[6]),
-            'y_increment': float(preamble_data[7]),
-            'y_origin': float(preamble_data[8]),
-            'y_reference': float(preamble_data[9])
-        }
+                        time_values = [x_origin + index * x_increment for index in range(len(voltage_values))]
 
-        return preamble_parameters
+        return time_values, voltage_values
 
 
-    def set_segment_count(self, segment_quantity: int):
-        if not self.is_connected or self.instrument is None:
-            return
+    def capture_segmented_waveform(self, segment_index: int, channel_number: int = 1, points_count: int = 2000) -> Tuple[List[float], List[float]]:
+        if not self._is_safe_to_operate():
+            time_values = []
+            voltage_values = []
+        elif not self._capabilities.get("has_segmented_memory", False):
+            time_values = []
+            voltage_values = []
+        else:
+            self._write_raw(f":ACQuire:SEGMent:INDex {segment_index}")
 
-        self.instrument.write(f':ACQuire:SEGMent:COUNt {segment_quantity}')
+            time_values, voltage_values = self.capture_waveform(channel_number, points_count)
+
+        return time_values, voltage_values
 
 
     def get_segment_count(self) -> int:
-        if not self.is_connected or self.instrument is None:
-            return 0
+        if not self._is_safe_to_operate():
+            segment_count = 0
+        elif not self._capabilities.get("has_segmented_memory", False):
+            segment_count = 0
+        else:
+            segment_count = self._query_integer(":ACQuire:SEGMent:COUNt?")
 
-        self.instrument.write(':ACQuire:SEGMent:COUNt?')
-        time.sleep(0.2)
-        segment_quantity = int(self.instrument.read())
-
-        return segment_quantity
-
-
-    def set_segment_index(self, segment_index_number: int):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(f':ACQuire:SEGMent:INDex {segment_index_number}')
+        return segment_count
 
 
-    def get_segment(self, segment_index_number: int, channel_number: int = 1) -> Tuple[List[float], List[float]]:
-        self.set_segment_index(segment_index_number)
-        time_axis, voltage_values = self.acquire_waveform(channel_number)
-
-        return time_axis, voltage_values
-
-
-    def load_mask(self, file_name: str):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(f':MASK:LOAD "{file_name}"')
+    def set_segment_count(self, segment_quantity: int):
+        if self._is_safe_to_operate():
+            if self._capabilities.get("has_segmented_memory", False):
+                if segment_quantity >= 1:
+                    self._write_raw(f":ACQuire:SEGMent:COUNt {segment_quantity}")
 
 
-    def check_mask(self) -> bool:
-        if not self.is_connected or self.instrument is None:
-            return False
+    def setup_for_experiment(self, channel_number: int = 1, volts_per_division: float = 1.0, seconds_per_division: float = 0.01) -> bool:
+        if not self._is_safe_to_operate():
+            setup_successful = False
+        elif channel_number < 1 or channel_number > self._capabilities.get("maximum_channels", 4):
+            setup_successful = False
+        else:
+            try:
+                self.stop_acquisition()
+                time.sleep(0.1)
 
-        self.instrument.write(':MASK:FAIL?')
-        time.sleep(0.2)
-        mask_status = self.instrument.read() == '1'
+                self.set_channel_enabled(channel_number, True)
+                self.set_channel_scale(channel_number, volts_per_division)
+                self.set_channel_offset(channel_number, 0.0)
+                self.set_channel_coupling(channel_number, self.coupling_type_dc)
+                self.set_timebase_scale(seconds_per_division)
+                self.set_trigger_source(f"CHAN{channel_number}")
+                self.set_trigger_level(0.0)
+                self.set_trigger_slope(self.trigger_slope_positive)
+                self.run_acquisition()
 
-        return mask_status
+                setup_successful = True
+            except Exception:
+                setup_successful = False
 
-
-    def get_mask_fail_count(self) -> int:
-        if not self.is_connected or self.instrument is None:
-            return 0
-
-        self.instrument.write(':MASK:COUNt?')
-        time.sleep(0.2)
-        fail_count = int(self.instrument.read())
-
-        return fail_count
-
-
-    def clear_mask_fail_count(self):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(':MASK:CLEar')
+        return setup_successful
 
 
     def save_screenshot(self, file_name: str = None) -> str:
-        if not self.is_connected or self.instrument is None:
-            return ""
+        if not self._is_safe_to_operate():
+            saved_file_name = ""
+        else:
+            self._write_raw(":DISPlay:DATA? PNG")
 
-        self.instrument.write(':DISPlay:DATA? PNG')
-        image_data = self.instrument.read_raw()
+            try:
+                image_data = self._instrument.read_raw()
+            except Exception:
+                image_data = None
 
-        if file_name is None:
-            file_name = f"screenshot_{time.strftime('%Y%m%d_%H%M%S')}.png"
+            if not image_data:
+                saved_file_name = ""
+            else:
+                if file_name is None:
+                    file_name = f"screenshot_{time.strftime('%Y%m%d_%H%M%S')}.png"
 
-        with open(file_name, 'wb') as file_handle:
-            if image_data.startswith(b'#'):
-                header_length = int(chr(image_data[1]))
-                image_data = image_data[2 + header_length:]
+                try:
+                    with open(file_name, "wb") as file_handle:
+                        if image_data.startswith(b"#"):
+                            header_length = int(chr(image_data[1]))
+                            image_data = image_data[2 + header_length:]
 
-            file_handle.write(image_data)
+                        file_handle.write(image_data)
 
-        return file_name
+                    saved_file_name = file_name
+                except Exception:
+                    saved_file_name = ""
 
-
-    def save_setup(self, memory_location: str = '1'):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(f':SAVE:SETup {memory_location}')
-
-
-    def recall_setup(self, memory_location: str = '1'):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(f':RECall:SETup {memory_location}')
+        return saved_file_name
 
 
-    def export_waveform_to_csv(self, file_name: str, channel_number: int = 1):
-        if not self.is_connected or self.instrument is None:
-            return
+    def save_setup(self, memory_location: str = "1"):
+        if self._is_safe_to_operate():
+            self._write_raw(f":SAVE:SETup {memory_location}")
 
-        self.instrument.write(f':EXPort:WAVeform:SOURce CHAN{channel_number}')
-        self.instrument.write(f':EXPort:WAVeform:STARt "{file_name}"')
+
+    def recall_setup(self, memory_location: str = "1"):
+        if self._is_safe_to_operate():
+            self._write_raw(f":RECall:SETup {memory_location}")
 
 
     def get_ip_address(self) -> str:
-        if not self.is_connected or self.instrument is None:
-            return ""
-
-        self.instrument.write(':SYSTem:COMMunicate:LAN:IPADdress?')
-        time.sleep(0.2)
-        ip_address = self.instrument.read().strip()
+        if not self._is_safe_to_operate():
+            ip_address = ""
+        else:
+            try:
+                ip_address = self._query_string(":SYSTem:COMMunicate:LAN:IPADdress?")
+            except Exception:
+                ip_address = ""
 
         return ip_address
 
 
-    def set_ip_address(self, ip_address: str):
-        if not self.is_connected or self.instrument is None:
-            return
-
-        self.instrument.write(f':SYSTem:COMMunicate:LAN:IPADdress "{ip_address}"')
-
-
     def get_mac_address(self) -> str:
-        if not self.is_connected or self.instrument is None:
-            return ""
-
-        self.instrument.write(':SYSTem:COMMunicate:LAN:MAC?')
-        time.sleep(0.2)
-        mac_address = self.instrument.read().strip()
+        if not self._is_safe_to_operate():
+            mac_address = ""
+        else:
+            try:
+                mac_address = self._query_string(":SYSTem:COMMunicate:LAN:MAC?")
+            except Exception:
+                mac_address = ""
 
         return mac_address
 
 
-    def get_all_settings(self) -> Dict[str, Any]:
-        if not self.is_connected or self.instrument is None:
-            return {}
+    def get_device_information(self) -> Dict[str, str]:
+        if not self._is_safe_to_operate():
+            device_info = {
+                "manufacturer": "Unknown",
+                "model_number": "Unknown",
+                "serial_number": "Unknown",
+                "firmware_version": "Unknown",
+                "capabilities": str({})
+            }
+        else:
+            device_info = {
+                "manufacturer": self._manufacturer if self._manufacturer else "Unknown",
+                "model_number": self._model_number if self._model_number else "Unknown",
+                "serial_number": "Unknown",
+                "firmware_version": "Unknown",
+                "capabilities": str(self._capabilities)
+            }
 
-        all_settings = {
-            'identification': self.identification(),
-            'timebase_scale': self.get_timebase_scale(),
-            'timebase_delay': self.get_timebase_delay(),
-            'timebase_mode': self.get_timebase_mode(),
-            'acquire_type': self.get_acquire_type(),
-            'average_count': self.get_average_count(),
-            'trigger_source': self.get_trigger_source(),
-            'trigger_level': self.get_trigger_level(),
-            'trigger_slope': self.get_trigger_slope(),
-        }
-
-        for channel_index in range(1, 5):
             try:
-                all_settings[f'channel_{channel_index}_display'] = self.get_channel_display(channel_index)
-                all_settings[f'channel_{channel_index}_scale'] = self.get_channel_scale(channel_index)
-                all_settings[f'channel_{channel_index}_offset'] = self.get_channel_offset(channel_index)
-                all_settings[f'channel_{channel_index}_coupling'] = self.get_channel_coupling(channel_index)
-            except Exception as error:
-                continue
+                full_identification = self._query_string("*IDN?")
+                parts = full_identification.split(",")
+
+                if len(parts) > 2:
+                    device_info["serial_number"] = parts[2]
+
+                if len(parts) > 3:
+                    device_info["firmware_version"] = parts[3]
+            except Exception:
+                pass
+
+        return device_info
+
+
+    def get_all_settings(self) -> Dict[str, Any]:
+        if not self._is_safe_to_operate():
+            all_settings = {}
+        else:
+            all_settings = {
+                "identification": self.get_identification(),
+                "timebase_scale": self.get_timebase_scale(),
+                "timebase_delay": self.get_timebase_delay(),
+                "timebase_mode": self.get_timebase_mode(),
+                "acquisition_type": self.get_acquisition_type(),
+                "average_count": self.get_average_count(),
+                "trigger_source": self.get_trigger_source(),
+                "trigger_level": self.get_trigger_level(),
+                "trigger_slope": self.get_trigger_slope(),
+                "trigger_mode": self.get_trigger_mode(),
+            }
+
+            for channel_index in range(1, self._capabilities.get("maximum_channels", 4) + 1):
+                try:
+                    all_settings[f"channel_{channel_index}_enabled"] = self.is_channel_enabled(channel_index)
+                    all_settings[f"channel_{channel_index}_scale"] = self.get_channel_scale(channel_index)
+                    all_settings[f"channel_{channel_index}_offset"] = self.get_channel_offset(channel_index)
+                    all_settings[f"channel_{channel_index}_coupling"] = self.get_channel_coupling(channel_index)
+                except Exception:
+                    continue
 
         return all_settings
 
 
-    def get_signal_statistics(self, channel_number: int = 1) -> Dict[str, float]:
-        statistics = {}
-        _, voltage_values = self.acquire_waveform(channel_number)
+    def compute_waveform_statistics(self, voltage_values: List[float]) -> Dict[str, float]:
+        if not voltage_values:
+            statistics = {}
+        else:
+            try:
+                voltage_array = numpy.array(voltage_values)
 
-        if voltage_values:
-            statistics = {
-                'points_count': len(voltage_values),
-                'maximum_voltage': max(voltage_values),
-                'minimum_voltage': min(voltage_values),
-                'peak_to_peak_voltage': max(voltage_values) - min(voltage_values),
-                'average_voltage': sum(voltage_values) / len(voltage_values),
-                'standard_deviation': float(numpy.std(voltage_values)) if len(voltage_values) > 1 else 0
-            }
+                statistics = {
+                    "points_count": len(voltage_values),
+                    "maximum_voltage": float(numpy.max(voltage_array)),
+                    "minimum_voltage": float(numpy.min(voltage_array)),
+                    "peak_to_peak_voltage": float(numpy.ptp(voltage_array)),
+                    "mean_voltage": float(numpy.mean(voltage_array)),
+                    "rms_voltage": float(numpy.sqrt(numpy.mean(voltage_array ** 2))),
+                    "standard_deviation": float(numpy.std(voltage_array))
+                }
+            except Exception:
+                statistics = {}
 
         return statistics
-
-
-    def get_device_information(self) -> Dict[str, str]:
-        if not self.is_connected or self.instrument is None:
-            return {}
-
-        self.instrument.write(':SYSTem:INFo:MANufacturer?')
-        time.sleep(0.2)
-        manufacturer = self.instrument.read().strip()
-        
-        self.instrument.write(':SYSTem:INFo:MODeL?')
-        time.sleep(0.2)
-        model_number = self.instrument.read().strip()
-        
-        self.instrument.write(':SYSTem:INFo:SERial?')
-        time.sleep(0.2)
-        serial_number = self.instrument.read().strip()
-        
-        self.instrument.write(':SYSTem:INFo:Firmware?')
-        time.sleep(0.2)
-        firmware_version = self.instrument.read().strip()
-
-        device_info = {
-            'manufacturer': manufacturer,
-            'model_number': model_number,
-            'serial_number': serial_number,
-            'firmware_version': firmware_version
-        }
-
-        return device_info
