@@ -1,36 +1,41 @@
-import sys
-import os
-from pathlib import Path
+from PyInstaller.utils.hooks import collect_all
 
+folders = [
+    'cypress',
+    'ftdi',
+    'prolific'
+]
 
-driver_folders = ['cypress', 'ftdi', 'keysight', 'prolific']
-driver_files = []
+files = []
+binaries = []
+imports = []
 
-for folder in driver_folders:
-    source_path = Path(folder)
+for folder in folders:
+    files.append((folder, folder))
 
-    if source_path.exists():
-        for file in source_path.iterdir():
-            if file.is_file():
-                driver_files.append((str(file), folder))
+files.append(('icon.png', '.'))
 
-icon_path = 'icon.png'
-
-if Path(icon_path).exists():
-    driver_files.append((icon_path, '.'))
+result = collect_all('ctypes')
+files += result[0]
+binaries += result[1]
+imports += result[2]
 
 analysis = Analysis(
     ['driver_manager.py'],
     pathex=[],
-    binaries=[],
-    datas=driver_files,
-    hiddenimports=['tkinter', 'threading'],
+    binaries=binaries,
+    datas=files,
+    hiddenimports=[
+        'tkinter',
+        'threading',
+        'subprocess'
+    ] + imports,
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],
     excludes=[],
     noarchive=False,
-    optimize=0
+    optimize=0,
 )
 
 pyz = PYZ(analysis.pure)
@@ -45,7 +50,7 @@ exe = EXE(
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
-    upx=False,
+    upx=True,
     upx_exclude=[],
     runtime_tmpdir=None,
     console=False,
@@ -54,5 +59,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon='icon.png'
+    icon='icon.png',
 )

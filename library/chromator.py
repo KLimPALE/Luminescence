@@ -1,5 +1,6 @@
 import ctypes
 import time
+import sys
 
 from pathlib import Path
 from typing import Tuple
@@ -7,10 +8,21 @@ from typing import List
 from typing import Dict
 from typing import Any
 
+if getattr(sys, 'frozen', False):
+    base_path = Path(sys._MEIPASS)
+else:
+    base_path = Path(__file__).parent.parent
+
+sdk_path = base_path / 'sdk'
+
 
 class Chromator:
-    def __init__(self, sdk_path: str = "../sdk"):
-        self._sdk_path = Path(sdk_path)
+    def __init__(self, sdk: str = None):
+        if sdk is None:
+            self._sdk_path = sdk_path
+        else:
+            self._sdk_path = Path(sdk)
+
         self._library_handle = None
         self._instrument_index = 0
         self._is_initialized = False
@@ -26,12 +38,9 @@ class Chromator:
 
     def connect(self) -> bool:
         connection_status = False
-
-        if hasattr(ctypes, "add_dll_directory"):
-            ctypes.add_dll_directory(str(self._sdk_path.absolute()))
-
+        
         library_path = self._sdk_path / "SolarLS.Sdk.dll"
-
+        
         if library_path.exists():
             self._library_handle = ctypes.CDLL(str(library_path))
 

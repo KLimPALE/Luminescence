@@ -4,10 +4,10 @@ title Building Driver Manager
 
 echo [1/3] Сборка исполняемого файла...
 
-pyinstaller driver_manager.spec --noconfirm >nul 2>&1
+PyInstaller driver_manager.spec --noconfirm >nul 2>&1
 
 if errorlevel 1 (
-    echo ОШИБКА: сборка не удалась!
+    echo Сборка не удалась!
     exit /b 1
 )
 

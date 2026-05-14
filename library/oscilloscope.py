@@ -339,30 +339,6 @@ class Oscilloscope:
         return operation_complete
 
 
-    def _wait_for_acquisition_complete(self, timeout_seconds: float = 30.0) -> bool:
-        if not self._is_safe_to_operate():
-            acquisition_complete = False
-        else:
-            start_time = time.time()
-            acquisition_complete = False
-
-            while time.time() - start_time < timeout_seconds:
-                try:
-                    self._write_raw(":ACQuire:COMPlete?")
-                    completion_percent = int(self._read_raw())
-
-                    if completion_percent >= 100:
-                        acquisition_complete = True
-
-                        break
-
-                    time.sleep(0.1)
-                except Exception:
-                    time.sleep(0.1)
-
-        return acquisition_complete
-
-
     def _ensure_trigger_is_stable(self, timeout_seconds: float = 5.0) -> bool:
         if not self._is_safe_to_operate():
             trigger_stable = False
@@ -966,16 +942,16 @@ class Oscilloscope:
         return measurement_result
 
 
-    def measure_phase(self, first_source: str = "CHAN1", second_source: str = "CHAN2") -> Optional[float]:
-        if not self._is_safe_to_operate():
-            phase_value = None
-        else:
-            try:
-                phase_value = self._query_float(f":MEASure:PHASe? {first_source},{second_source}")
-            except Exception:
-                phase_value = None
+    def measure_overshoot(self, channel_number: int = 1) -> Optional[float]:
+        measurement_result = self.measure_parameter(self.measurement_parameter_overshoot, channel_number)
 
-        return phase_value
+        return measurement_result
+
+
+    def measure_preshoot(self, channel_number: int = 1) -> Optional[float]:
+        measurement_result = self.measure_parameter(self.measurement_parameter_preshoot, channel_number)
+
+        return measurement_result
 
 
     def measure_delay(self, first_source: str = "CHAN1", second_source: str = "CHAN2") -> Optional[float]:
@@ -988,6 +964,24 @@ class Oscilloscope:
                 delay_value = None
 
         return delay_value
+
+
+    def measure_phase(self, first_source: str = "CHAN1", second_source: str = "CHAN2") -> Optional[float]:
+        if not self._is_safe_to_operate():
+            phase_value = None
+        else:
+            try:
+                phase_value = self._query_float(f":MEASure:PHASe? {first_source},{second_source}")
+            except Exception:
+                phase_value = None
+
+        return phase_value
+
+
+    def measure_ac_rms(self, channel_number: int = 1) -> Optional[float]:
+        measurement_result = self.measure_parameter(self.measurement_parameter_ac_rms, channel_number)
+
+        return measurement_result
 
 
     def set_cursor_mode(self, cursor_mode: str):
@@ -1201,7 +1195,7 @@ class Oscilloscope:
         return time_values, voltage_values
 
 
-    def acquire_averaged_waveform(self, channel_number: int = 1, average_count: int = 64, points_count: int = 2000, timeout_seconds: float = 30.0) -> Tuple[List[float], List[float]]:
+    def acquire_averaged_waveform(self, channel_number: int = 1, average_count: int = 64, points_count: int = 2000, timeout_seconds: float = 120.0) -> Tuple[List[float], List[float]]:
         if not self._is_safe_to_operate():
             time_values = []
             voltage_values = []
@@ -1217,25 +1211,20 @@ class Oscilloscope:
 
             self.set_acquisition_type(self.acquisition_type_average)
             self.set_average_count(average_count)
+            time.sleep(0.05)
 
             self.run_acquisition()
-            time.sleep(0.1)
+            time.sleep(0.05)
 
             start_time = time.time()
             data_ready = False
 
             while time.time() - start_time < timeout_seconds:
                 try:
-                    self._write_raw(":OPERation:CONDition?")
-                    response = self._read_raw()
+                    if self.is_acquisition_complete():
+                        data_ready = True
 
-                    if response:
-                        status_value = int(response)
-
-                        if status_value & 16:
-                            data_ready = True
-
-                            break
+                        break
                 except Exception:
                     pass
 
@@ -1244,16 +1233,40 @@ class Oscilloscope:
             if not data_ready:
                 self.set_acquisition_type(old_acquisition_type)
                 self.set_average_count(old_average_count)
-
                 time_values = []
                 voltage_values = []
             else:
+                if average_count >= 65536:
+                    extra_delay = 20.0
+                elif average_count >= 32768:
+                    extra_delay = 16.0
+                elif average_count >= 16384:
+                    extra_delay = 12.0
+                elif average_count >= 8192:
+                    extra_delay = 10.0
+                elif average_count >= 4096:
+                    extra_delay = 8.0
+                elif average_count >= 2048:
+                    extra_delay = 6.0
+                elif average_count >= 1024:
+                    extra_delay = 5.0
+                elif average_count >= 512:
+                    extra_delay = 4.0
+                elif average_count >= 256:
+                    extra_delay = 3.0
+                else:
+                    extra_delay = 1.0
+
+                time.sleep(extra_delay)
+
+                self.stop_acquisition()
+                time.sleep(0.05)
+
                 preable = self._get_waveform_preable()
 
                 if not preable:
                     self.set_acquisition_type(old_acquisition_type)
                     self.set_average_count(old_average_count)
-
                     time_values = []
                     voltage_values = []
                 else:
@@ -1272,6 +1285,54 @@ class Oscilloscope:
                         time_values = [x_origin + index * x_increment for index in range(len(voltage_values))]
 
         return time_values, voltage_values
+
+
+    def acquire_averaged_waveform_retry(self, channel_number: int = 1, average_count: int = 64, points_count: int = 2000, max_retries: int = 3, timeout_seconds: float = 120.0) -> Tuple[List[float], List[float]]:
+        time_values = []
+        voltage_values = []
+
+        for attempt_index in range(max_retries):
+            time_values, voltage_values = self.acquire_averaged_waveform(
+                channel_number, average_count, points_count, timeout_seconds
+            )
+
+            if time_values and voltage_values:
+                break
+
+            time.sleep(0.5)
+
+            self.stop_acquisition()
+            time.sleep(0.1)
+            self.run_acquisition()
+            time.sleep(0.1)
+
+        return time_values, voltage_values
+
+
+    def get_acquisition_status(self) -> Dict[str, Any]:
+        status_info = {}
+
+        if self._is_safe_to_operate():
+            try:
+                status_info["type"] = self.get_acquisition_type()
+                status_info["average_count"] = self.get_average_count()
+                status_info["is_complete"] = self.is_acquisition_complete()
+
+                self._write_raw(":OPERation:CONDition?")
+                response = self._read_raw()
+
+                if response:
+                    status_info["operation_status"] = int(response)
+
+                self._write_raw(":TRIGger:STATus?")
+                response = self._read_raw()
+
+                if response:
+                    status_info["trigger_status"] = response.strip()
+            except Exception:
+                pass
+
+        return status_info
 
 
     def capture_segmented_waveform(self, segment_index: int, channel_number: int = 1, points_count: int = 2000) -> Tuple[List[float], List[float]]:
