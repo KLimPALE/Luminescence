@@ -221,6 +221,27 @@ class Oscilloscope:
         return binary_supported
 
 
+    def wait_for_ready(self, timeout_seconds: float = 10.0) -> bool:
+        if not self._is_safe_to_operate():
+            return False
+
+        start_time = time.time()
+
+        while time.time() - start_time < timeout_seconds:
+            try:
+                self._write_raw("*OPC?")
+                response = self._read_raw()
+
+                if response == "1":
+                    return True
+            except Exception:
+                pass
+
+            time.sleep(0.1)
+
+        return False
+
+
     def disconnect(self):
         if self._instrument is not None:
             try:
@@ -315,52 +336,17 @@ class Oscilloscope:
         return query_result
 
 
-    def _wait_for_operation_complete(self, timeout_seconds: float = 10.0) -> bool:
+    def get_trigger_status(self) -> str:
         if not self._is_safe_to_operate():
-            operation_complete = False
-        else:
-            start_time = time.time()
-            operation_complete = False
+            return ""
 
-            while time.time() - start_time < timeout_seconds:
-                try:
-                    self._write_raw("*OPC?")
-                    response = self._read_raw()
+        try:
+            self._write_raw(":TRIGger:STATus?")
+            status = self._read_raw()
 
-                    if response == "1":
-                        operation_complete = True
-
-                        break
-
-                    time.sleep(0.1)
-                except Exception:
-                    time.sleep(0.1)
-
-        return operation_complete
-
-
-    def _ensure_trigger_is_stable(self, timeout_seconds: float = 5.0) -> bool:
-        if not self._is_safe_to_operate():
-            trigger_stable = False
-        else:
-            start_time = time.time()
-            trigger_stable = False
-
-            while time.time() - start_time < timeout_seconds:
-                try:
-                    self._write_raw(":TRIGger:STATus?")
-                    trigger_status = self._read_raw()
-
-                    if trigger_status.upper() == "STOP" or trigger_status.upper() == "AUTO":
-                        trigger_stable = True
-
-                        break
-
-                    time.sleep(0.1)
-                except Exception:
-                    time.sleep(0.1)
-
-        return trigger_stable
+            return status.strip().upper()
+        except Exception:
+            return ""
 
 
     def set_timeout(self, milliseconds: int):
@@ -382,7 +368,7 @@ class Oscilloscope:
     def reset(self):
         if self._is_safe_to_operate():
             self._write_raw("*RST")
-            self._wait_for_operation_complete(5.0)
+            self.wait_for_ready(5.0)
 
 
     def self_test(self) -> bool:
@@ -608,7 +594,7 @@ class Oscilloscope:
     def auto_scale(self):
         if self._is_safe_to_operate():
             self._write_raw(":AUToscale")
-            self._wait_for_operation_complete(10.0)
+            self.wait_for_ready(10.0)
 
 
     def set_timebase_scale(self, seconds_per_division: float):
@@ -692,7 +678,7 @@ class Oscilloscope:
     def single_acquisition(self):
         if self._is_safe_to_operate():
             self._write_raw(":SINGle")
-            self._wait_for_operation_complete(5.0)
+            self.wait_for_ready(5.0)
 
 
     def force_trigger(self):
@@ -827,14 +813,11 @@ class Oscilloscope:
             if averages_number > 65536:
                 averages_number = 65536
 
-            self.set_acquisition_type(self.acquisition_type_normal)
-            time.sleep(0.05)
-
             self._write_raw(f":ACQuire:COUNt {averages_number}")
-            time.sleep(0.05)
+            time.sleep(0.1)
 
-            self.set_acquisition_type(self.acquisition_type_average)
-            time.sleep(0.05)
+            self._write_raw(":ACQuire:TYPE AVER")
+            time.sleep(0.1)
 
 
     def get_average_count(self) -> int:
@@ -1110,38 +1093,38 @@ class Oscilloscope:
 
     def _get_waveform_preable(self) -> Dict[str, Any]:
         if not self._is_safe_to_operate():
-            preable = {}
-        else:
+            return {}
+
+        try:
             self._write_raw(":WAVeform:PREamble?")
-            time.sleep(0.2)
+            time.sleep(0.5)
 
             preable_string = self._read_raw()
 
             if not preable_string:
-                preable = {}
-            else:
-                preable_parts = preable_string.split(",")
+                return {}
 
-                if len(preable_parts) < 10:
-                    preable = {}
-                else:
-                    try:
-                        preable = {
-                            "format_code": int(preable_parts[0]),
-                            "acquisition_type": int(preable_parts[1]),
-                            "points_count": int(preable_parts[2]),
-                            "average_count": int(preable_parts[3]),
-                            "x_increment": float(preable_parts[4]),
-                            "x_origin": float(preable_parts[5]),
-                            "x_reference": float(preable_parts[6]),
-                            "y_increment": float(preable_parts[7]),
-                            "y_origin": float(preable_parts[8]),
-                            "y_reference": float(preable_parts[9])
-                        }
-                    except Exception:
-                        preable = {}
+            preable_parts = preable_string.split(",")
 
-        return preable
+            if len(preable_parts) < 10:
+                return {}
+
+            preable = {
+                "format_code": int(preable_parts[0]),
+                "acquisition_type": int(preable_parts[1]),
+                "points_count": int(preable_parts[2]),
+                "average_count": int(preable_parts[3]),
+                "x_increment": float(preable_parts[4]),
+                "x_origin": float(preable_parts[5]),
+                "x_reference": float(preable_parts[6]),
+                "y_increment": float(preable_parts[7]),
+                "y_origin": float(preable_parts[8]),
+                "y_reference": float(preable_parts[9])
+            }
+
+            return preable
+        except Exception:
+            return {}
 
 
     def _read_waveform_data(self, points_count: int = 2000) -> List[float]:
@@ -1169,30 +1152,48 @@ class Oscilloscope:
 
     def capture_waveform(self, channel_number: int = 1, points_count: int = 2000) -> Tuple[List[float], List[float]]:
         if not self._is_safe_to_operate():
-            time_values = []
-            voltage_values = []
-        elif channel_number < 1 or channel_number > self._capabilities.get("maximum_channels", 4):
-            time_values = []
-            voltage_values = []
-        else:
+            return [], []
+
+        if channel_number < 1 or channel_number > self._capabilities.get("maximum_channels", 4):
+            return [], []
+
+        old_timeout = self._instrument.timeout
+        self._instrument.timeout = 10000
+
+        try:
+            self._write_raw(f":WAVeform:SOURce CHAN{channel_number}")
+            self._write_raw(f":WAVeform:POINts {points_count}")
+            self._write_raw(":WAVeform:FORMat ASCII")
+
+            self._write_raw(":WAVeform:DATA?")
+            time.sleep(0.5)
+
+            data_string = self._read_raw()
+
+            if not data_string:
+                return [], []
+
+            if data_string.startswith("#"):
+                header_length = int(data_string[1])
+                data_string = data_string[2 + header_length:]
+
+            if not data_string:
+                return [], []
+
+            voltage_values = [float(single_value) for single_value in data_string.strip().split(",")]
+
             preable = self._get_waveform_preable()
 
             if not preable:
-                time_values = []
-                voltage_values = []
-            else:
-                voltage_values = self._read_waveform_data(points_count)
+                return [], []
 
-                if not voltage_values:
-                    time_values = []
-                    voltage_values = []
-                else:
-                    x_increment = preable.get("x_increment", 1.0)
-                    x_origin = preable.get("x_origin", 0.0)
+            x_increment = preable.get("x_increment", 1.0)
+            x_origin = preable.get("x_origin", 0.0)
+            time_values = [x_origin + index * x_increment for index in range(len(voltage_values))]
 
-                    time_values = [x_origin + index * x_increment for index in range(len(voltage_values))]
-
-        return time_values, voltage_values
+            return time_values, voltage_values
+        finally:
+            self._instrument.timeout = old_timeout
 
 
     def acquire_averaged_waveform(self, channel_number: int = 1, average_count: int = 64, points_count: int = 2000, timeout_seconds: float = 120.0) -> Tuple[List[float], List[float]]:
